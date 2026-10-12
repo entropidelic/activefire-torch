@@ -1,5 +1,5 @@
 [project]
-name = "wildfire-detect"
+name = "activefire-torch"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-wildfire-detect = "wildfire_detect:main"
+activefire-torch = "activefire_torch:main"
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
