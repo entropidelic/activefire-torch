@@ -81,3 +81,57 @@ Every non-trivial decision in this project: what was decided, which alternatives
 **Alternatives.** Add `segmentation-models-pytorch` up front, as the original plan did.
 
 **Why.** It brings in `timm`, `huggingface_hub`, `safetensors` and more, which would be locked and installed long before they are used, and possibly never if E4 changes or is dropped. Adding it later is a single `uv add`. At E4 the choice is between `smp` (less code, but its 10-channel adaptation of the first convolution must be read and explained) and `torchvision` with our own decoder (about 50 more lines, but the adaptation is explicit). See the plan, Phase 4.
+
+---
+
+## D8. Train on two regions of the full dataset, not the "small subset" (2026-10-12, Phase 2)
+
+**Finding.** The "small subset" provided by the original repo (`samples.zip`, 242 MB) contains only **100 image patches from 96 different scenes**, with Schroeder, Murphy and Kumar-Roy masks (Kumar-Roy named `GOLI_v2`). It has **no intersection or voting masks**. A 70/15/15 split by scene would leave about 70 training patches, which is too few to train or compare anything.
+
+**Decision.** Train on two regions of the full dataset: **Oceania (~2 GB) and North_America2 (~3 GB)** (sizes from the original `src/utils/download_dataset.py`). They are the two smallest region archives and include all five mask sources. The small subset is kept only for quick tests that the code runs. `scripts/download_data.sh` downloads each part separately (`subset`, `manual`, `regions`).
+
+**Alternatives.**
+- A mid-size set of regions (15–25 GB, e.g. Europe or Asia4 + Asia2): more data and more varied scenes, but slower to download and train, and U-Net (10c) would likely need a capped budget.
+- Only the provided data: no meaningful training possible.
+
+**Consequences and limitations.**
+- This departs from the original plan, which said to use only the small subset. The plan assumed the subset was trainable; it is not.
+- Two regions are not a global sample like the paper's. Results may not carry over to other regions (e.g. African savanna fires or Siberian boreal fires), and this must be stated wherever results are reported.
+- More regions can be added later with the same script.
+
+---
+
+## D9. Train and test only on patches with fire, as the original does (2026-10-12, Phase 2)
+
+**Finding.** The original dataset stores a mask file only for patches where the algorithm detected fire ("in order to save some space", `src/utils/generate_nonfire_masks.py`). The original split script builds its patch list from the mask files (`src/utils/split_dataset.py`). So **the original models never saw a fire-free patch** during training, validation or the automatic test, even though most patches in the dataset have no fire. This is not stated in the paper.
+
+**Decision.** Do the same: for each mask source, use only the patches that have a mask file for that source.
+
+**Alternatives.** Include fire-free patches with all-zero masks. That is more realistic for deployment, where most of the image has no fire, but our numbers would stop being comparable to the paper's.
+
+**Why.** The first goal is replicating the paper, and this setting determines the class balance the model learns from, so it has to match. It means the automatic test metrics say nothing about false alarms on fire-free patches. The manually annotated set does include fire-free scenes (Sahara, Greenland, Milan), so false alarms are still measured there. Adding fire-free patches is a natural extra experiment later, changing only that one factor.
+
+---
+
+## D10. Voting masks as the main mask source for baselines (2026-10-12, Phase 1)
+
+**Decision.** The baseline runs (U-Net-Light (3c) and U-Net (10c)) train on the **voting** masks: fire where at least 2 of the 3 algorithms agree.
+
+**Why.** The paper's headline result (abstract: 87.2% precision, 92.4% recall) is U-Net-Light (3c) trained on voting masks and evaluated on the manual set (Table 3). Voting also gives the best F-score on the manual set, so it is the natural reference.
+
+**Alternatives.** Kumar-Roy has the most training patches (143k patches with fire in the full dataset), but it is the weakest algorithm on the manual set (F 74.7%, Table 3).
+
+---
+
+## D11. Settings where paper, original code and our plan disagree: open, to decide at Phase 3 (2026-10-12, Phase 1)
+
+Reading the paper and code (see `docs/paper_notes.md` §7–8) turned up differences between the paper, the code and this project's plan. Each one will get a decision before the first real training run.
+
+| Setting | Paper | Original code | Our plan | Leaning |
+|---|---|---|---|---|
+| Decision threshold | 0.25 | 0.25 | 0.5, with E6 asking "is 0.5 right?" | Use **0.25** for the replication baselines; E6 tunes it on validation. |
+| Batch size | 16 | 64 for most U-Net-Light runs, 16 for U-Net, one run 12 | Paper's | **16** for all, as the paper states, so architecture is the only difference. |
+| Input scaling | not stated | divide by 65535 | per-band mean/std from the training split | Undecided. Mean/std is more standard, but /65535 is what the original did. Decide after inspecting value ranges in Phase 2. |
+| Early stopping / weights kept | val loss, patience 5 | val loss, patience 5; keeps **last** epoch | val **F1**; keeps **best** epoch | Undecided. Plan's choice is better practice; replication argues for the original. |
+| Split | random by patch, 40/10/50 | same, seed 42 | by scene, 70/15/15 | **By scene** (decided in the plan), to avoid leakage. The gap this causes is discussed in `results/replication.md`. |
+| Augmentation | not stated | none | flips and 90° rotations | Undecided. |
