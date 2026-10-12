@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data: downloaded, never committed (except the split definition)
+data/*
+!data/splits.csv
+
+# Run artifacts: keep configs, logs and metrics; drop weights
+runs/*/weights*
+
+# OS
+.DS_Store
