@@ -74,7 +74,7 @@ Every non-trivial decision in this project: what was decided, which alternatives
 
 ---
 
-## D7. No pretrained-encoder library until E4 (2026-10-12, Phase 0)
+## D7. No pretrained-encoder library until E4, now the optional T15 (2026-10-12, Phase 0)
 
 **Decision.** Do not add `segmentation-models-pytorch` (or `torchvision`) now. Only experiment E4 (ImageNet-pretrained ResNet-34 encoder vs. random init) needs one; the baselines and every other experiment use the from-scratch U-Net.
 
@@ -101,7 +101,7 @@ Every non-trivial decision in this project: what was decided, which alternatives
 
 ---
 
-## D9. Train and test only on patches with fire, as the original does (2026-10-12, Phase 2)
+## D9. Train and test only on patches with fire, as the original does (2026-10-12, Phase 2; Stage 2 test set extended in D13)
 
 **Finding.** The original dataset stores a mask file only for patches where the algorithm detected fire ("in order to save some space", `src/utils/generate_nonfire_masks.py`). The original split script builds its patch list from the mask files (`src/utils/split_dataset.py`). So **the original models never saw a fire-free patch** during training, validation or the automatic test, even though most patches in the dataset have no fire. This is not stated in the paper.
 
@@ -123,7 +123,7 @@ Every non-trivial decision in this project: what was decided, which alternatives
 
 ---
 
-## D11. Settings where paper, original code and our plan disagree: open, to decide at Phase 3 (2026-10-12, Phase 1)
+## D11. Settings where paper, original code and our plan disagree (2026-10-12, Phase 1; resolved in D12)
 
 Reading the paper and code (see `docs/paper_notes.md` §7–8) turned up differences between the paper, the code and this project's plan. Each one will get a decision before the first real training run.
 
@@ -135,3 +135,59 @@ Reading the paper and code (see `docs/paper_notes.md` §7–8) turned up differe
 | Early stopping / weights kept | val loss, patience 5 | val loss, patience 5; keeps **last** epoch | val **F1**; keeps **best** epoch | Undecided. Plan's choice is better practice; replication argues for the original. |
 | Split | random by patch, 40/10/50 | same, seed 42 | by scene, 70/15/15 | **By scene** (decided in the plan), to avoid leakage. The gap this causes is discussed in `results/replication.md`. |
 | Augmentation | not stated | none | flips and 90° rotations | Undecided. |
+
+---
+
+## D12. Two stages: faithful replication first, then one change at a time (2026-10-12)
+
+**Decision.**
+- **Stage 1** copies the original protocol as closely as possible, including choices we consider weak:
+  - Random 40/10/50 split by patch, fire-only patches.
+  - Inputs divided by 65535, no augmentation.
+  - Batch size 16, Adam with lr 0.001, binary cross-entropy.
+  - Early stopping on validation loss (patience 5), keeping the last epoch.
+  - Threshold 0.25.
+- **Stage 2** turns each place where we would do something differently into its own experiment, changing exactly one factor.
+- The first Stage 2 run, **T1**, switches to a split by scene. It becomes the reference for all other Stage 2 runs, so no Stage 2 result is inflated by leakage between train and test.
+
+**This resolves D11.** Each open setting takes the original's value in Stage 1, and the alternative becomes a Stage 2 experiment:
+
+| Setting | Stage 1 | Stage 2 experiment |
+|---|---|---|
+| Split | by patch | by scene (T1, the new reference) |
+| Threshold | 0.25 | tuned on validation (T10) |
+| Batch size | 16 (as the paper states; the code's 64/12 values are ignored) | — |
+| Input scaling | ÷65535 | per-band mean/std (T4) |
+| Weights kept | last epoch | best epoch (T9a); then monitor val F1 (T9b) |
+| Augmentation | none | flips + rotations (T3) |
+
+Split S keeps the 40/10/50 proportions on purpose, so that T1 changes only how the data is grouped. With 50% held out for testing, training data is limited; that is the price of a clean comparison.
+
+**Alternatives.** Split by scene from the start, as the earlier plan required. That is better practice, but then no run reproduces the paper's protocol. The gap to the paper would mix the effect of the split with everything else, and could not be explained.
+
+**Why.** The person wants a clean replication **and** practice changing every part of the pipeline (data, inputs, model, loss, training, evaluation), each with a measured result. This design gives both, and T1 directly measures how much the paper's split inflated its scores.
+
+**Other changes.**
+- ImageNet pretraining (formerly E4) becomes an optional last run (T15). The application asks whether models were trained from scratch or fine-tuned, so one small comparison of our own is worth having if compute allows.
+- Error analysis (Phase 5) stays. Recall by fire size is what makes the depth experiment (T6) interpretable.
+
+---
+
+## D13. Stage 2 evaluation rules, fixed before any run (2026-10-12)
+
+These rules are written down before seeing any Stage 2 result, so they cannot be adjusted to fit the results.
+
+1. **Independent changes plus one combined run.** T2–T13 are each compared against T1 only. Changes can interact, especially scaling, loss and threshold, so a final run (T14) combines every change judged an improvement and measures the combination directly.
+2. **Selection only on validation.** Thresholds and the winners for T14 are chosen on validation results, never on the test split or the manual set. Otherwise the reported test numbers would be optimistic, because the test set would have helped choose the model.
+3. **Fire-free patches in the test set.** In the original protocol, every test patch contains fire, so false alarms on fire-free terrain are only measured on the manual set (most of its 9,044 patches have no fire, and 3 of its 13 scenes have none). Split S therefore has a **full** version of validation and test that includes fire-free patches (as all-zero masks), and the test split is identical for every Stage 2 run. T1 is reported on both versions, to keep the link to Stage 1. This also makes T2 (fire-free training patches) measurable. **Caveat:** "fire-free" means the algorithm found no fire. If the model finds a real fire the algorithm missed, it counts as a false positive.
+4. **Threshold-free metric.** Different losses and normalizations change how confident the model's outputs are, so comparing them at one fixed threshold is unfair. Every run therefore reports:
+   - F1 at 0.25 (for comparison with the paper).
+   - F1 at the threshold tuned on validation.
+   - **Average precision** (area under the precision-recall curve). It is computed from a 1,000-bin histogram of scores accumulated over the whole set, because exact computation over billions of pixels does not fit in memory.
+5. **Primary metric:** average precision on the full test split.
+6. **Decision rule:**
+   - With 3 seeds per configuration, a change counts as an improvement or a degradation only if the difference in mean primary metric is **larger than the standard deviation of both configurations**. Otherwise it is **inconclusive**.
+   - With 3 seeds the standard deviation is itself uncertain, so this rule is deliberately simple. The seed variation on MPS also includes non-determinism (D6).
+   - A configuration run with only 1 seed is always inconclusive.
+7. **Inference cost.** The averaging and ensemble options (T11 seeds, T12 flips, T13 per-mask models) report their inference cost (3×, 8×, 3×) next to their gain. How much that matters depends on the sensor: Landsat revisits a place every 16 days, so data volume matters more than latency, while geostationary sensors deliver images every few minutes.
+8. **Manual-set overlap.** The manual scenes are from September and the training scenes from August, so full scene IDs cannot match. The real risk is the same location on a different date, e.g. the same industrial heat source. Overlap is therefore checked by **WRS path/row**. In Stage 1 it is reported next to the comparison with the paper; in Stage 2, overlapping path/rows are excluded from training.
