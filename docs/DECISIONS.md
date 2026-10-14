@@ -191,3 +191,31 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
    - A configuration run with only 1 seed is always inconclusive.
 7. **Inference cost.** The averaging and ensemble options (T11 seeds, T12 flips, T13 per-mask models) report their inference cost (3×, 8×, 3×) next to their gain. How much that matters depends on the sensor: Landsat revisits a place every 16 days, so data volume matters more than latency, while geostationary sensors deliver images every few minutes.
 8. **Manual-set overlap.** The manual scenes are from September and the training scenes from August, so full scene IDs cannot match. The real risk is the same location on a different date, e.g. the same industrial heat source. Overlap is therefore checked by **WRS path/row**. In Stage 1 it is reported next to the comparison with the paper; in Stage 2, overlapping path/rows are excluded from training.
+
+---
+
+## D14. Cross-region experiment T1b (2026-10-14)
+
+**Decision.** Add T1b to Stage 2: train on one region (Oceania or North_America2), test on the other region's Split S test patches, in both directions, with a size-matched control.
+
+**Why.**
+- T1 measures the effect of testing on unseen *locations*. T1b measures the next step: an unseen *region* (different continent, land cover, fire types and sun angles). Together with R1 (random patch split) this gives three levels of "how new is the test data", reported in one table.
+- A model that only works where it was trained is a practical problem for any fire-monitoring product, so this is worth measuring directly.
+
+**Design choices.**
+- **Same test patches for every model.** T1, T1b and the control are all evaluated on the held-out region's Split S test patches, so only the training data differs.
+- **Size-matched control.** Training on one region uses fewer patches than T1. The control removes training locations at random (from both regions) until its training set has the same size as T1b's. T1b vs. control isolates the region effect; T1 vs. control shows the data-size effect.
+- **Validation from the training region only.** Early stopping and threshold tuning must not see the held-out region.
+- **No extra split file.** `data/splits/scene.csv` gets a region column; T1b selects from it.
+
+**Cost.** 12 extra trainings (2 directions × T1b and control × 3 seeds).
+
+## D15. Split S groups by location, not by scene (2026-10-14)
+
+**Decision.** Split S assigns whole WRS path/rows (locations) to train / val / test, 40 / 10 / 50, with seed 42. Each region is split on its own.
+
+**Why.**
+- Landsat passes over the same location every 16 days, so one location can have two August scenes. Splitting by scene could put one date in training and the other in test: the same land, roads, factories and often the same fire. That is a smaller version of the leak Split S is meant to remove.
+- Splitting each region on its own guarantees that both regions have test locations, which T1b needs.
+
+**Cost.** The 40 / 10 / 50 proportions are of locations, so the share of patches in each split can differ a bit (on the 100-patch sample: 38 / 9 / 53). The real numbers are reported at Checkpoint A.

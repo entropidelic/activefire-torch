@@ -1,42 +1,45 @@
-"""Compute device selection.
+"""Choose where PyTorch runs: an NVIDIA GPU ("cuda"), an Apple GPU ("mps") or the CPU.
 
-The order is CUDA -> MPS -> CPU. CUDA and MPS never coexist on one machine
-(NVIDIA vs. Apple Silicon), so in practice this picks whichever GPU backend
-exists and only falls back to CPU when there is none.
+A machine has at most one of the two GPU kinds, so "auto" simply uses the GPU
+if there is one, and the CPU otherwise.
 """
 
 import torch
 
-VALID_DEVICES = ("auto", "cuda", "mps", "cpu")
+DEVICE_CHOICES = ("auto", "cuda", "mps", "cpu")
 
 
-def get_device(preference: str = "auto") -> torch.device:
-    """Return the torch device to use.
+def get_device(choice: str = "auto") -> torch.device:
+    """Return the device to run on.
 
-    Args:
-        preference: "auto" picks the best available backend. "cuda", "mps" or
-            "cpu" force that backend and fail loudly if it is unavailable,
-            instead of silently training somewhere slower.
+    choice:
+        "auto"                use the GPU if there is one, else the CPU.
+        "cuda", "mps", "cpu"  use exactly that one. If it is not available,
+                              raise an error instead of quietly training on
+                              something slower.
     """
-    if preference not in VALID_DEVICES:
-        raise ValueError(f"Unknown device {preference!r}; expected one of {VALID_DEVICES}")
+    if choice not in DEVICE_CHOICES:
+        raise ValueError(f"Unknown device {choice!r}; choose one of {DEVICE_CHOICES}")
 
-    if preference == "auto":
-        if torch.cuda.is_available():
+    cuda_available = torch.cuda.is_available()
+    mps_available = torch.backends.mps.is_available()
+
+    if choice == "auto":
+        if cuda_available:
             return torch.device("cuda")
-        if torch.backends.mps.is_available():
+        if mps_available:
             return torch.device("mps")
         return torch.device("cpu")
 
-    if preference == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("Device 'cuda' requested but CUDA is not available")
-    if preference == "mps" and not torch.backends.mps.is_available():
-        raise RuntimeError("Device 'mps' requested but MPS is not available")
-    return torch.device(preference)
+    if choice == "cuda" and not cuda_available:
+        raise RuntimeError("Device 'cuda' was asked for, but there is no NVIDIA GPU")
+    if choice == "mps" and not mps_available:
+        raise RuntimeError("Device 'mps' was asked for, but there is no Apple GPU")
+    return torch.device(choice)
 
 
 def describe_device(device: torch.device) -> str:
-    """Human-readable device description, saved with each run's config."""
+    """A short description of the device, saved with each training run."""
     if device.type == "cuda":
         return f"cuda ({torch.cuda.get_device_name(device)})"
     return device.type

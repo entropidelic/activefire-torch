@@ -6,20 +6,20 @@ import rasterio
 from rasterio.transform import from_origin
 
 from activefire_torch.files import (
-    FILE_BANDS,
-    band_indices,
-    canonical_source,
-    parse_name,
+    BANDS_IN_FILE,
+    band_positions,
+    list_files,
+    mask_source,
+    read_file_name,
     read_image,
     read_mask,
-    scan,
 )
 
 SCENE = "LC08_L1TP_124046_20200810_20200810_01_RT"
 
 
 def write_tif(path, array):
-    """Write a [C, H, W] array as a small GeoTIFF."""
+    """Write a [bands, height, width] array as a small GeoTIFF."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
         path,
@@ -35,13 +35,13 @@ def write_tif(path, array):
         dst.write(array)
 
 
-def test_parse_image_name():
-    name = parse_name(f"{SCENE}_p00367.tif")
+def test_read_image_file_name():
+    name = read_file_name(f"{SCENE}_p00367.tif")
     assert name.scene_id == SCENE
-    assert (name.wrs_path, name.wrs_row, name.pathrow) == (124, 46, "124046")
-    assert name.acquired == date(2020, 8, 10)
+    assert name.pathrow == "124046"
+    assert name.date == date(2020, 8, 10)
     assert name.patch == 367
-    assert name.tag is None
+    assert name.mask_tag is None
 
 
 @pytest.mark.parametrize(
@@ -56,39 +56,39 @@ def test_parse_image_name():
         ("intersection", "intersection"),
     ],
 )
-def test_parse_mask_name(tag, source):
-    name = parse_name(f"/some/dir/{SCENE}_{tag}_p00367.tif")
+def test_read_mask_file_name(tag, source):
+    name = read_file_name(f"/some/folder/{SCENE}_{tag}_p00367.tif")
     assert name.scene_id == SCENE
     assert name.patch == 367
-    assert name.tag == tag
-    assert canonical_source(tag) == source
+    assert name.mask_tag == tag
+    assert mask_source(tag) == source
 
 
-def test_l1gt_scene_parses():
-    assert parse_name("LC08_L1GT_117060_20200825_20200825_01_RT_p00625.tif").pathrow == "117060"
+def test_l1gt_scene_name():
+    assert read_file_name("LC08_L1GT_117060_20200825_20200825_01_RT_p00625.tif").pathrow == "117060"
 
 
-@pytest.mark.parametrize("bad", ["notes.tif", f"{SCENE}.tif", f"{SCENE}_p00367.png"])
-def test_unrecognized_name_raises(bad):
+@pytest.mark.parametrize("bad", ["notes.tif", f"{SCENE}.tif", f"{SCENE}_p00367.png", f"{SCENE}_pXYZ.tif"])
+def test_wrong_file_name_raises(bad):
     with pytest.raises(ValueError):
-        parse_name(bad)
+        read_file_name(bad)
 
 
 def test_unknown_tag_has_no_source():
-    assert canonical_source("Something") is None
+    assert mask_source("Something") is None
 
 
-def test_band_indices_are_zero_based_and_skip_b8():
-    assert band_indices(["B7", "B6", "B2"]) == [6, 5, 1]
-    assert band_indices(["B9", "B10", "B11"]) == [7, 8, 9]
+def test_band_positions_count_from_zero_and_skip_b8():
+    assert band_positions(["B7", "B6", "B2"]) == [6, 5, 1]
+    assert band_positions(["B9", "B10", "B11"]) == [7, 8, 9]
     with pytest.raises(ValueError):
-        band_indices(["B8"])
+        band_positions(["B8"])
 
 
-def test_read_image_selects_bands_by_name(tmp_path):
-    # Fill file band i (0-based) with the value i, so the result shows which
-    # file bands were read.
-    image = np.stack([np.full((4, 4), i, dtype=np.uint16) for i in range(len(FILE_BANDS))])
+def test_read_image_picks_bands_by_name(tmp_path):
+    # Fill band number i (counting from 0) with the value i, so the result
+    # shows which bands were read.
+    image = np.stack([np.full((4, 4), i, dtype=np.uint16) for i in range(len(BANDS_IN_FILE))])
     path = tmp_path / f"{SCENE}_p00001.tif"
     write_tif(path, image)
 
@@ -106,7 +106,7 @@ def test_read_mask_returns_2d(tmp_path):
     assert mask.dtype == np.uint8
 
 
-def test_scan_classifies_files(tmp_path):
+def test_list_files_sorts_files_into_kinds(tmp_path):
     image = np.zeros((10, 2, 2), dtype=np.uint16)
     mask = np.zeros((1, 2, 2), dtype=np.uint8)
     write_tif(tmp_path / "Oceania" / "images" / f"{SCENE}_p00001.tif", image)
@@ -114,8 +114,10 @@ def test_scan_classifies_files(tmp_path):
     write_tif(tmp_path / "Oceania" / "masks" / f"{SCENE}_Mystery_p00001.tif", mask)
     write_tif(tmp_path / "Oceania" / "other.tif", mask)
 
-    df = scan(tmp_path).set_index("tag", drop=False)
-    assert set(df["group"]) == {"Oceania"}
-    assert sorted(df["kind"]) == ["image", "mask", "unknown_tag", "unparsed"]
-    assert df.loc["Schroeder", "source"] == "schroeder"
-    assert df.loc["Schroeder", "pathrow"] == "124046"
+    files = list_files(tmp_path)
+    assert set(files["region"]) == {"Oceania"}
+    assert sorted(files["kind"]) == ["image", "mask", "unknown_tag", "unparsed"]
+
+    schroeder = files[files["mask_tag"] == "Schroeder"].iloc[0]
+    assert schroeder["mask_source"] == "schroeder"
+    assert schroeder["pathrow"] == "124046"

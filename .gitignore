@@ -7,7 +7,7 @@ __pycache__/
 
 # Data: downloaded, never committed (except the split definition)
 data/*
-!data/splits.csv
+!data/splits/
 
 # Run artifacts: keep configs, logs and metrics; drop weights
 runs/*/weights*

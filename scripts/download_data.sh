@@ -67,10 +67,14 @@ extract() {
     echo "Extracting $zip -> $dest"
     rm -rf "$dest.tmp"
     mkdir -p "$dest.tmp"
+    # Extract into a temporary folder first, so a half-finished extraction is
+    # never mistaken for a finished one.
     unzip -q "$zip" -d "$dest.tmp"
+
+    # For every zip found inside (the loop also works with spaces in names):
     find "$dest.tmp" -name '*.zip' -print0 | while IFS= read -r -d '' inner; do
-        echo "  nested: ${inner#"$dest.tmp"/}"
-        unzip -q "$inner" -d "${inner%.zip}"
+        echo "  nested: $inner"
+        unzip -q "$inner" -d "${inner%.zip}"  # "a/b.zip" -> into "a/b"
         rm "$inner"
     done
     mv "$dest.tmp" "$dest"
@@ -81,26 +85,34 @@ get_subset() {
     extract "$ZIP_DIR/samples.zip" "$RAW_DIR/samples"
 }
 
+# Each entry in MANUAL_IDS and REGION_IDS is "name:id".
+#   ${entry%%:*}  is the part before the colon (the name)
+#   ${entry#*:}   is the part after the colon (the Google Drive ID)
 get_manual() {
-    local entry name
+    local entry name id
     for entry in "${MANUAL_IDS[@]}"; do
         name="${entry%%:*}"
-        download "${entry#*:}" "$ZIP_DIR/$name.zip"
+        id="${entry#*:}"
+        download "$id" "$ZIP_DIR/$name.zip"
         extract "$ZIP_DIR/$name.zip" "$RAW_DIR/manual_annotations/$name"
     done
 }
 
 get_regions() {
-    local entry name
+    local entry name id
     for entry in "${REGION_IDS[@]}"; do
         name="${entry%%:*}"
-        download "${entry#*:}" "$ZIP_DIR/$name.zip"
+        id="${entry#*:}"
+        download "$id" "$ZIP_DIR/$name.zip"
         extract "$ZIP_DIR/$name.zip" "$RAW_DIR/regions/$name"
     done
 }
 
+# The parts asked for on the command line, or all of them if none.
 parts=("$@")
-[[ ${#parts[@]} -eq 0 ]] && parts=(subset manual regions)
+if [[ ${#parts[@]} -eq 0 ]]; then
+    parts=(subset manual regions)
+fi
 
 mkdir -p "$ZIP_DIR"
 for part in "${parts[@]}"; do

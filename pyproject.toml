@@ -1,7 +1,7 @@
 [project]
 name = "activefire-torch"
 version = "0.1.0"
-description = "Add your description here"
+description = "PyTorch reimplementation of active fire detection in Landsat-8 images (Pereira et al., 2021)"
 readme = "README.md"
 authors = [
     { name = "Mariano Nicolini", email = "mariano.nicolini@lambdaclass.com" }
@@ -13,13 +13,11 @@ dependencies = [
     "pandas>=3.0.6",
     "pyyaml>=6.0.3",
     "rasterio>=1.5.2",
+    "scikit-learn>=1.9.1",
     "scipy>=1.18.1",
     "torch>=2.14.1",
     "tqdm>=4.70.1",
 ]
-
-[project.scripts]
-activefire-torch = "activefire_torch:main"
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
