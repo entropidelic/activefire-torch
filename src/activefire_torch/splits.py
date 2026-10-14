@@ -68,13 +68,16 @@ def split_by_patch(patches: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
     Returns the same rows with a new "split" column.
     These are the same two calls as in the original script.
     """
-    train, val_and_test = train_test_split(patches, test_size=VAL + TEST, random_state=seed)
-    val, test = train_test_split(val_and_test, test_size=TEST / (VAL + TEST), random_state=seed)
+    # Pick the rows (by their row label) that go to each split.
+    train_rows, val_and_test_rows = train_test_split(patches.index, test_size=VAL + TEST, random_state=seed)
+    val_rows, test_rows = train_test_split(val_and_test_rows, test_size=TEST / (VAL + TEST), random_state=seed)
 
-    train = train.assign(split="train")
-    val = val.assign(split="val")
-    test = test.assign(split="test")
-    return pd.concat([train, val, test])
+    # Write the split name on those rows.
+    patches = patches.copy()
+    patches.loc[train_rows, "split"] = "train"
+    patches.loc[val_rows, "split"] = "val"
+    patches.loc[test_rows, "split"] = "test"
+    return patches
 
 
 def split_by_location(patches: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
