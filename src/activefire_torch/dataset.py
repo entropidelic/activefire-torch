@@ -37,17 +37,40 @@ def read_mask(path):
         return src.read(1)
 
 
-def compute_band_stats(split_file, bands):
+def select_rows(split_file, split, mask_source, version):
+    """The rows of a split file that a dataset uses.
+
+    split        "train", "val" or "test"
+    mask_source  e.g. "voting"
+    version      "fire_only"  only patches with a mask file from mask_source,
+                              as the original did
+                 "full"       every patch; patches without a mask file get
+                              an all-zero mask. In this dataset those are
+                              patches where only another algorithm found
+                              fire (docs/DECISIONS.md D16)
+    """
+    if version not in ("fire_only", "full"):
+        raise ValueError(f"Unknown version {version!r}; use 'fire_only' or 'full'")
+
+    table = pd.read_csv(split_file)
+    rows = table[table["split"] == split]
+    if version == "fire_only":
+        rows = rows[rows[f"mask_{mask_source}"].notna()]
+    # Number the remaining rows 0, 1, 2, ...
+    return rows.reset_index(drop=True)
+
+
+def compute_band_stats(split_file, bands, mask_source, version):
     """The average and spread (standard deviation) of each band, over every
     pixel of the training patches.
 
-    Only training patches are used: if validation or test patches were
-    included, the model would get a small hint about them.
+    Only the patches used for training count (same mask_source and version
+    as the training dataset): if validation or test patches were included,
+    the model would get a small hint about them.
 
     Returns e.g. {"B7": {"mean": 10061.2, "std": 4052.3}, ...}
     """
-    table = pd.read_csv(split_file)
-    train_rows = table[table["split"] == "train"]
+    train_rows = select_rows(split_file, "train", mask_source, version)
 
     # Add up, per band, the values and the squared values of every pixel.
     # The images are read one at a time, so they never all sit in memory.
@@ -73,6 +96,7 @@ class FireDataset(Dataset):
     split        "train", "val" or "test"
     bands        which bands to read, e.g. ["B7", "B6", "B2"]
     mask_source  whose masks to use, e.g. "schroeder" (reads the column mask_schroeder)
+    version      "fire_only" or "full": which patches to include (see select_rows)
     scaling      how to turn the raw values into small numbers:
                    "max"          divide by 65535, as the original did (values 0 to 1)
                    "standardize"  subtract each band's average and divide by its
@@ -81,13 +105,11 @@ class FireDataset(Dataset):
                  also when this dataset is val or test
     """
 
-    def __init__(self, split_file, split, bands, mask_source, scaling="max", band_stats=None):
+    def __init__(self, split_file, split, bands, mask_source, version, scaling="max", band_stats=None):
         if scaling not in ("max", "standardize"):
             raise ValueError(f"Unknown scaling {scaling!r}; use 'max' or 'standardize'")
 
-        table = pd.read_csv(split_file)
-        # Keep only the rows of this split, numbered 0, 1, 2, ...
-        self.rows = table[table["split"] == split].reset_index(drop=True)
+        self.rows = select_rows(split_file, split, mask_source, version)
         self.bands = bands
         self.mask_column = f"mask_{mask_source}"
         self.scaling = scaling

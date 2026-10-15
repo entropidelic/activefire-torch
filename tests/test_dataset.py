@@ -51,35 +51,60 @@ def test_read_mask_returns_2d(tmp_path):
 def write_split_file(folder):
     """Three tiny patches, every pixel of every band set to one value:
     two training patches (100 and 300) and one test patch (60000).
-    None of them has a mask file."""
+    Only patch "a" has a Schroeder mask file (all fire)."""
     rows = []
     for name, value, split in [("a", 100, "train"), ("b", 300, "train"), ("c", 60000, "test")]:
         path = folder / f"{name}.tif"
         write_tif(path, np.full((10, 4, 4), value, dtype=np.uint16))
         rows.append({"image": str(path), "split": split, "mask_schroeder": None})
+
+    mask_path = folder / "a_mask.tif"
+    write_tif(mask_path, np.ones((1, 4, 4), dtype=np.uint8))
+    rows[0]["mask_schroeder"] = str(mask_path)
+
     split_file = folder / "split.csv"
     pd.DataFrame(rows).to_csv(split_file, index=False)
     return split_file
 
 
+def test_fire_only_keeps_patches_with_a_mask_file(tmp_path):
+    split_file = write_split_file(tmp_path)
+
+    fire_only = FireDataset(split_file, "train", ["B7"], "schroeder", "fire_only")
+    assert len(fire_only) == 1  # only "a"
+    _, mask = fire_only[0]
+    assert mask.sum() == 16  # all 4 x 4 pixels are fire
+
+    full = FireDataset(split_file, "train", ["B7"], "schroeder", "full")
+    assert len(full) == 2  # "a" and "b"
+    _, mask = full[1]
+    assert mask.shape == (1, 4, 4)
+    assert mask.sum() == 0  # "b" has no mask file -> no fire
+
+
 def test_max_scaling_divides_by_65535(tmp_path):
     split_file = write_split_file(tmp_path)
-    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", scaling="max")
-    image, mask = dataset[1]
+    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", "full", scaling="max")
+    image, _ = dataset[1]
     assert image.shape == (1, 4, 4)
     assert image[0, 0, 0].item() == pytest.approx(300 / 65535)
-    assert mask.shape == (1, 4, 4)
-    assert mask.sum() == 0  # no mask file -> no fire
 
 
 def test_band_stats_come_from_training_patches_only(tmp_path):
     split_file = write_split_file(tmp_path)
-    stats = compute_band_stats(split_file, ["B7"])
+    stats = compute_band_stats(split_file, ["B7"], "schroeder", "full")
     # Only 100 and 300 count; the test patch (60000) is ignored.
     assert stats["B7"]["mean"] == pytest.approx(200)
     assert stats["B7"]["std"] == pytest.approx(100)
 
     # The test set is scaled with the training numbers.
-    test_set = FireDataset(split_file, "test", ["B7"], "schroeder", scaling="standardize", band_stats=stats)
+    test_set = FireDataset(split_file, "test", ["B7"], "schroeder", "full", scaling="standardize", band_stats=stats)
     image, _ = test_set[0]
     assert image[0, 0, 0].item() == pytest.approx((60000 - 200) / 100)
+
+
+def test_band_stats_use_the_same_patches_as_training(tmp_path):
+    split_file = write_split_file(tmp_path)
+    # With fire_only, only "a" (100) is a training patch.
+    stats = compute_band_stats(split_file, ["B7"], "schroeder", "fire_only")
+    assert stats["B7"]["mean"] == pytest.approx(100)
