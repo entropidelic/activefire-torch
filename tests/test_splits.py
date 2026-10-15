@@ -1,6 +1,52 @@
 import pandas as pd
+import pytest
 
-from activefire_torch.splits import split_by_location, split_by_patch
+from activefire_torch.splits import list_patches, read_file_name, split_by_location, split_by_patch
+
+SCENE = "LC08_L1TP_124046_20200810_20200810_01_RT"
+
+
+def test_read_image_file_name():
+    assert read_file_name(f"{SCENE}_p00367.tif") == {
+        "scene_id": SCENE,
+        "pathrow": "124046",
+        "patch": 367,
+        "mask_tag": None,
+    }
+
+
+@pytest.mark.parametrize("tag", ["Schroeder", "Murphy", "Kumar-Roy", "GOLI_v2", "v1", "Voting", "intersection"])
+def test_read_mask_file_name(tag):
+    name = read_file_name(f"/some/folder/{SCENE}_{tag}_p00367.tif")
+    assert name is not None
+    assert name["scene_id"] == SCENE
+    assert name["patch"] == 367
+    assert name["mask_tag"] == tag
+
+
+@pytest.mark.parametrize("bad", ["notes.tif", f"{SCENE}.tif", f"{SCENE}_p00367.png", f"{SCENE}_pXYZ.tif"])
+def test_wrong_file_name_gives_none(bad):
+    assert read_file_name(bad) is None
+
+
+def test_list_patches_matches_masks_to_images(tmp_path):
+    # list_patches only looks at names, so empty files are enough.
+    folder = tmp_path / "Oceania"
+    folder.mkdir()
+    for name in [
+        f"{SCENE}_p00001.tif",  # image with a Schroeder mask
+        f"{SCENE}_p00002.tif",  # image without masks (no fire found)
+        f"{SCENE}_Schroeder_p00001.tif",
+        f"{SCENE}_Mystery_p00001.tif",  # unknown mask source: skipped
+        "notes.tif",  # not a dataset file: skipped
+    ]:
+        (folder / name).touch()
+
+    patches = list_patches(tmp_path).set_index("patch")
+    assert list(patches.index) == [1, 2]
+    assert set(patches["region"]) == {"Oceania"}
+    assert patches.loc[1, "mask_schroeder"] == str(folder / f"{SCENE}_Schroeder_p00001.tif")
+    assert pd.isna(patches.loc[2, "mask_schroeder"])
 
 
 def fake_patches():

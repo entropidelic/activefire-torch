@@ -16,8 +16,6 @@ from pathlib import Path
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from activefire_torch.files import list_files
-
 # Where the downloaded regions are. Each region is a subfolder:
 #   data/raw/regions/Oceania/...
 #   data/raw/regions/North_America2/...
@@ -30,6 +28,64 @@ SPLITS_FOLDER = Path("data/splits")
 TRAIN, VAL, TEST = 0.4, 0.1, 0.5
 SEED = 42
 
+# The word in a mask file name -> who made the mask. The small sample calls
+# the Kumar-Roy masks "GOLI_v2"; the hand-made masks are tagged "v1".
+MASK_SOURCE_BY_TAG = {
+    "schroeder": "schroeder",
+    "murphy": "murphy",
+    "kumar-roy": "kumar-roy",
+    "goli_v2": "kumar-roy",
+    "intersection": "intersection",
+    "voting": "voting",
+    "v1": "manual",
+}
+
+
+def read_file_name(file_name: str | Path) -> dict | None:
+    """Read the parts of an image or mask file name.
+
+    Every file is a 256 x 256 patch cut from one Landsat-8 picture (a "scene").
+    Split at "_", a mask file name like
+
+        LC08_L1TP_124046_20200810_20200810_01_RT_Schroeder_p00367.tif
+
+    has these parts:
+
+        LC08_L1TP_124046_20200810_20200810_01_RT   the scene (always 7 parts)
+        124046                                     its location: WRS path 124, row 046
+        Schroeder                                  who made the mask (images don't have this)
+        p00367                                     the patch number inside the scene
+
+    and gives
+        {"scene_id": "LC08_L1TP_124046_20200810_20200810_01_RT",
+         "pathrow": "124046", "patch": 367, "mask_tag": "Schroeder"}
+
+    mask_tag is None for images. Returns None if the name does not look like
+    a dataset file.
+    """
+    file_name = Path(file_name)
+    parts = file_name.stem.split("_")
+
+    looks_right = (
+        file_name.suffix == ".tif"
+        and len(parts) >= 8
+        and parts[0] == "LC08"
+        and parts[-1].startswith("p")
+        and parts[-1][1:].isdigit()
+    )
+    if not looks_right:
+        return None
+
+    # Anything between the scene and the patch number is the mask tag. It can
+    # contain "_" itself, e.g. "GOLI_v2".
+    tag_parts = parts[7:-1]
+    return {
+        "scene_id": "_".join(parts[:7]),
+        "pathrow": parts[2],
+        "patch": int(parts[-1][1:]),
+        "mask_tag": "_".join(tag_parts) if tag_parts else None,
+    }
+
 
 def list_patches(data_folder: Path) -> pd.DataFrame:
     """Make a table with one row per image patch.
@@ -38,23 +94,52 @@ def list_patches(data_folder: Path) -> pd.DataFrame:
         image            path of the image file
         scene_id         the satellite picture it was cut from
         pathrow          the location, e.g. "091084"
-        region           the region subfolder, e.g. "Oceania"
+        region           the first folder inside data_folder, e.g. "Oceania"
         patch            the patch number inside the picture
         mask_schroeder   path of the Schroeder mask, or empty if Schroeder found no fire
         mask_murphy      the same for each other mask source found in the folder
         ...
-    """
-    all_files = list_files(data_folder)
 
-    images = all_files[all_files["kind"] == "image"]
-    table = images[["file", "scene_id", "pathrow", "region", "patch"]]
-    table = table.rename(columns={"file": "image"})
+    Files whose names are not recognized are skipped with a warning, so a
+    mask source we don't know about can't disappear silently.
+    """
+    images = []
+    masks = []
+    skipped = []
+
+    for file in sorted(Path(data_folder).rglob("*.tif")):
+        name = read_file_name(file)
+        if name is None:
+            skipped.append(file)
+            continue
+
+        if name["mask_tag"] is None:
+            images.append(
+                {
+                    "image": str(file),
+                    "scene_id": name["scene_id"],
+                    "pathrow": name["pathrow"],
+                    "region": file.relative_to(data_folder).parts[0],
+                    "patch": name["patch"],
+                }
+            )
+        else:
+            source = MASK_SOURCE_BY_TAG.get(name["mask_tag"].lower())
+            if source is None:
+                skipped.append(file)
+                continue
+            masks.append({"scene_id": name["scene_id"], "patch": name["patch"], "source": source, "file": str(file)})
+
+    if skipped:
+        print(f"Warning: skipped {len(skipped)} files with unknown names, for example {skipped[0]}")
+
+    table = pd.DataFrame(images, columns=["image", "scene_id", "pathrow", "region", "patch"])
+    masks = pd.DataFrame(masks, columns=["scene_id", "patch", "source", "file"])
 
     # Add one mask column per mask source (schroeder, murphy, voting, ...).
     # A mask belongs to the image with the same scene_id and patch number.
-    masks = all_files[all_files["kind"] == "mask"]
-    for source in sorted(masks["mask_source"].unique()):
-        source_masks = masks[masks["mask_source"] == source]
+    for source in sorted(masks["source"].unique()):
+        source_masks = masks[masks["source"] == source]
         source_masks = source_masks[["scene_id", "patch", "file"]]
         source_masks = source_masks.rename(columns={"file": f"mask_{source}"})
         table = table.merge(source_masks, on=["scene_id", "patch"], how="left")
