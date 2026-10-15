@@ -14,7 +14,7 @@ BATCHNORM_MOMENTUM = 0.01
 # `type: ignore` on zeros_: PyTorch types bias as optional.
 
 
-def conv_block(in_channels, out_channels, batchnorm=True):
+def conv_block(in_channels: int, out_channels: int, batchnorm: bool = True) -> nn.Sequential:
     """2 x (3x3 conv -> BatchNorm -> ReLU). Keeps height and width."""
     layers = []
     for layer_in_channels in [in_channels, out_channels]:
@@ -36,13 +36,13 @@ class Upsample(nn.Module):
     ones instead, a one-pixel shift (see test_upsample_matches_tensorflow).
     """
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
         self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2)
         nn.init.xavier_uniform_(self.conv.weight)
         nn.init.zeros_(self.conv.bias)  # type: ignore
 
-    def forward(self, image):
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         return self.conv(image)[:, :, :-1, :-1]
 
 
@@ -57,7 +57,7 @@ class UNet(nn.Module):
     stability.
     """
 
-    def __init__(self, in_channels, base_filters=16, dropout=0.1, batchnorm=True):
+    def __init__(self, in_channels: int, base_filters: int = 16, dropout: float = 0.1, batchnorm: bool = True) -> None:
         super().__init__()
         f = base_filters
 
@@ -84,7 +84,7 @@ class UNet(nn.Module):
         nn.init.xavier_uniform_(self.output.weight)
         nn.init.zeros_(self.output.bias)  # type: ignore
 
-    def forward(self, image):
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         """image [N, in_channels, H, W], H and W divisible by 16 -> logits [N, 1, H, W].
 
         Comments give the original's variable names.

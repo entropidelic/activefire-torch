@@ -1,5 +1,7 @@
 """PyTorch dataset of (image, fire mask) patches."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import rasterio
@@ -14,7 +16,7 @@ BANDS_IN_FILE = ("B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11")
 MAX_VALUE = 65535
 
 
-def read_image(path, bands=None):
+def read_image(path: str | Path, bands: list[str] | None = None) -> np.ndarray:
     """Raw values as [bands, height, width]. bands: names, e.g. ["B7", "B6", "B2"];
     None reads all 10."""
     with rasterio.open(path) as src:
@@ -27,13 +29,13 @@ def read_image(path, bands=None):
         return src.read([BANDS_IN_FILE.index(band) + 1 for band in bands])
 
 
-def read_mask(path):
+def read_mask(path: str | Path) -> np.ndarray:
     """Mask as [height, width], 1 = fire."""
     with rasterio.open(path) as src:
         return src.read(1)
 
 
-def select_rows(split_file, split, mask_source, version):
+def select_rows(split_file: str | Path, split: str, mask_source: str, version: str) -> pd.DataFrame:
     """Rows of a split file used by one dataset.
 
     split        "train", "val" or "test"
@@ -52,7 +54,9 @@ def select_rows(split_file, split, mask_source, version):
     return rows.reset_index(drop=True)
 
 
-def compute_band_stats(split_file, bands, mask_source, version):
+def compute_band_stats(
+    split_file: str | Path, bands: list[str], mask_source: str, version: str
+) -> dict[str, dict[str, float]]:
     """Per-band mean and std over all pixels of the training patches.
 
     Uses the same rows as the training dataset (same mask_source and version);
@@ -77,7 +81,7 @@ def compute_band_stats(split_file, bands, mask_source, version):
     return {band: {"mean": float(mean[i]), "std": float(std[i])} for i, band in enumerate(bands)}
 
 
-class FireDataset(Dataset):
+class FireDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     """Patches of one split.
 
     split_file   CSV from splits.py, e.g. data/splits/scene.csv
@@ -92,7 +96,17 @@ class FireDataset(Dataset):
     augment      random 90° rotations and mirroring; training only
     """
 
-    def __init__(self, split_file, split, bands, mask_source, version, scaling="max", band_stats=None, augment=False):
+    def __init__(
+        self,
+        split_file: str | Path,
+        split: str,
+        bands: list[str],
+        mask_source: str,
+        version: str,
+        scaling: str = "max",
+        band_stats: dict[str, dict[str, float]] | None = None,
+        augment: bool = False,
+    ) -> None:
         if scaling not in ("max", "standardize"):
             raise ValueError(f"Unknown scaling {scaling!r}; use 'max' or 'standardize'")
 
@@ -109,10 +123,10 @@ class FireDataset(Dataset):
             self.mean = np.array([band_stats[band]["mean"] for band in bands], dtype=np.float32).reshape(-1, 1, 1)
             self.std = np.array([band_stats[band]["std"] for band in bands], dtype=np.float32).reshape(-1, 1, 1)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.rows)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         """(image [bands, H, W] float32 scaled, mask [1, H, W] float32 in {0, 1})."""
         row = self.rows.iloc[index]
 
