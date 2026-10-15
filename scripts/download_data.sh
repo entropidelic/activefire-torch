@@ -5,8 +5,10 @@
 #   subset   the "small subset" from the original repo (100 patches; only
 #            useful for smoke tests)
 #   manual   the manually annotated patches (final evaluation set)
-#   regions  two regions of the full dataset, Oceania (~2 GB) and
-#            North_America2 (~3 GB), used for training (see docs/DECISIONS.md)
+#   regions  three regions of the full dataset, Oceania (~2 GB),
+#            North_America2 (~3 GB) and South_America (~13 GB), used for
+#            training (see docs/DECISIONS.md D8 and D17). Regions already
+#            downloaded are skipped.
 #
 # The full dataset (~200 GB, 11 regions) is not downloaded.
 # Google Drive file IDs are taken from the original repository:
@@ -43,6 +45,7 @@ MANUAL_IDS=(
 REGION_IDS=(
     "Oceania:1xHYTICHKU0u3-kIrq-pM9k0YaeQt60Bt"
     "North_America2:1zW_pEIggJ5Li7uQX9XKMfHkcgL3kiUoi"
+    "South_America:1hnBUmYkvFYohTf9hTnKiyp2MXVevglK7"
 )
 
 download() {

@@ -84,7 +84,7 @@ Every non-trivial decision in this project: what was decided, which alternatives
 
 ---
 
-## D8. Train on two regions of the full dataset, not the "small subset" (2026-10-12, Phase 2)
+## D8. Train on two regions of the full dataset, not the "small subset" (2026-10-12, Phase 2; a third region added in D17)
 
 **Finding.** The "small subset" provided by the original repo (`samples.zip`, 242 MB) contains only **100 image patches from 96 different scenes**, with Schroeder, Murphy and Kumar-Roy masks (Kumar-Roy named `GOLI_v2`). It has **no intersection or voting masks**. A 70/15/15 split by scene would leave about 70 training patches, which is too few to train or compare anything.
 
@@ -233,3 +233,25 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 - **Small training sets.** With voting masks, the fire-only set has 1,970 patches, so about 790 for training with the 40 / 10 / 50 split. Results will vary more between seeds, and more of them may come out inconclusive under the D13 decision rule. Adding a third region (same download script) is an option to decide at Checkpoint A, once per-region counts are known.
 
 **Why keep the full version anyway.** It is still the only automatic test where a patch can have no fire for the chosen source, and it costs nothing extra.
+
+---
+
+## D17. Add South America as a third region (2026-10-15, Phase 2)
+
+**Finding.** With Oceania and North_America2 only, the voting-mask training set has 840 patches and Split S validation has 128, of which 39 are from North_America2 (`docs/data_inspection.md`). Choosing a stopping point and a threshold from a few dozen patches is mostly noise, and one direction of T1b would train on 312 patches.
+
+**Decision.** Add **South_America** (~13 GB, from the original `src/utils/download_dataset.py`) with the same download script. The split code needs no change: each region is split 40 / 10 / 50 on its own (D15).
+
+**Why South America.**
+- It is the target market of the job this project is for (fire detection in Latin America), so results on South American fires are the most relevant ones.
+- At roughly 1,000 patches per GB in the two current regions, it should about triple the data (an estimate until the notebook counts it).
+- It adds a third, very different region (e.g. Amazon and Cerrado fires) to the region comparison.
+
+**Alternatives.**
+- Keep two regions and balance the location split by patch count: cheap, but North America's validation would still be about 80 voting patches.
+- A smaller region (Asia4, ~8 GB): less data and less relevant.
+
+**Consequences.**
+- Training takes roughly 3× longer.
+- South America will be most of the data, so pooled results mostly reflect it; per-region results are reported next to them.
+- Whether the location split still needs balancing, and whether T1b gets a third direction (e.g. train on two regions, test on South America), are decided once the real counts are in, before any training.
