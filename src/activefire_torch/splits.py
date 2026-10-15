@@ -14,6 +14,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 DATA_FOLDER = Path("data/raw/regions")  # one subfolder per region
+MANUAL_FOLDER = Path("data/raw/manual_annotations")
 SPLITS_FOLDER = Path("data/splits")
 
 # Proportions and seed of the original.
@@ -170,6 +171,12 @@ if __name__ == "__main__":
     # Split S: one file with every patch.
     split_s = split_by_location(patches)
     split_s.to_csv(SPLITS_FOLDER / "scene.csv", index=False)
+
+    # The manual set is only ever used for testing.
+    manual = list_patches(MANUAL_FOLDER)
+    manual["split"] = "test"
+    manual.to_csv(SPLITS_FOLDER / "manual.csv", index=False)
+    print(f"Manual set: {len(manual)} patches, {manual['mask_manual'].notna().sum()} with a manual mask")
 
     print(f"{len(patches)} patches, {patches['pathrow'].nunique()} locations")
     print("Split S, patches per region and split:")
