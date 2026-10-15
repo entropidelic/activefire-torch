@@ -20,10 +20,10 @@
 # renaming or moving files. Interpreting the layout is done in Phase 2 and
 # documented in docs/data_inspection.md.
 #
-# Google Drive sometimes refuses large downloads ("Too many users have viewed
-# or downloaded this file recently"). If that happens, wait and re-run: files
-# that were already downloaded are skipped. As a last resort, download them by
-# hand from the URLs printed below and place them in data/raw/compressed/.
+# Google Drive sometimes refuses or cuts off large downloads. Re-run the
+# script: finished files are skipped, and a cut-off download resumes from its
+# partial file (data/raw/compressed/*.part*.part). As a last resort, download
+# by hand from the URLs printed below and place them in data/raw/compressed/.
 #
 # Usage (from the repo root):
 #   scripts/download_data.sh                 # everything
@@ -55,7 +55,9 @@ download() {
         return
     fi
     echo "Downloading $out (https://drive.google.com/file/d/$id/view)"
-    $GDOWN "$id" -O "$out.part"
+    # --continue resumes from a partial file left by an earlier run;
+    # --retries resumes within this run if the connection drops.
+    $GDOWN --continue --retries 5 "$id" -O "$out.part"
     mv "$out.part" "$out"
 }
 
