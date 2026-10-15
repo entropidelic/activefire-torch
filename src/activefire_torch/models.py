@@ -1,6 +1,10 @@
 """U-Net, ported from get_unet and conv2d_block in the original
 src/train/*/*/models.py (docs/paper_notes.md §6)."""
 
+from pathlib import Path
+
+import h5py
+import numpy as np
 import torch
 from torch import nn
 
@@ -114,3 +118,70 @@ class UNet(nn.Module):
         up1 = self.up1(self.dropout(joined))  # c9
 
         return self.output(up1)
+
+
+def keras_kernel_to_torch(kernel: np.ndarray) -> torch.Tensor:
+    """Keras conv kernel (height, width, in, out) -> PyTorch Conv2d weight (out, in, height, width).
+
+    The same reordering turns a Keras transposed-conv kernel (height, width,
+    out, in) into the PyTorch ConvTranspose2d layout (in, out, height, width).
+    """
+    return torch.from_numpy(np.ascontiguousarray(kernel.transpose(3, 2, 0, 1)))
+
+
+def load_keras_weights(model: UNet, path: str | Path) -> None:
+    """Copy the authors' trained weights (an .h5 file from their download_weights.py)
+    into model.
+
+    Keras and PyTorch both list layers in creation order, which is the same in
+    get_unet and UNet, so layers are paired by position. Each pair's layer type
+    and every shape are checked.
+    """
+    torch_layers = [m for m in model.modules() if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.BatchNorm2d))]
+
+    keras_layers = []
+    with h5py.File(path, "r") as file:
+        for layer_name in np.array(file.attrs["layer_names"]):
+            group = file[layer_name]
+            assert isinstance(group, h5py.Group)
+            # e.g. b"conv2d_1/kernel:0" -> "kernel"
+            weights = {
+                weight_name.decode().split("/")[-1].removesuffix(":0"): np.array(group[weight_name])
+                for weight_name in np.array(group.attrs["weight_names"])
+            }
+            if weights:  # activation, pooling, dropout and concatenate layers have none
+                keras_layers.append((layer_name.decode(), weights))
+
+    if len(keras_layers) != len(torch_layers):
+        raise ValueError(f"{path} has {len(keras_layers)} layers with weights, the model {len(torch_layers)}")
+
+    keras_type_by_torch_type = {
+        nn.Conv2d: "conv2d",
+        nn.ConvTranspose2d: "conv2d_transpose",
+        nn.BatchNorm2d: "batch_normalization",
+    }
+    for torch_layer, (keras_name, weights) in zip(torch_layers, keras_layers):
+        expected = keras_type_by_torch_type[type(torch_layer)]
+        if keras_name.rsplit("_", 1)[0] != expected:  # "conv2d_transpose_1" -> "conv2d_transpose"
+            raise ValueError(f"Expected a {expected} layer, found {keras_name}")
+
+        if isinstance(torch_layer, nn.BatchNorm2d):
+            pairs = [
+                (torch_layer.weight, weights["gamma"]),
+                (torch_layer.bias, weights["beta"]),
+                (torch_layer.running_mean, weights["moving_mean"]),
+                (torch_layer.running_var, weights["moving_variance"]),
+            ]
+        else:
+            pairs = [
+                (torch_layer.weight, keras_kernel_to_torch(weights["kernel"])),
+                (torch_layer.bias, weights["bias"]),
+            ]
+
+        for target, source in pairs:
+            source = torch.as_tensor(source)
+            # copy_ would silently broadcast a wrong shape, so check first.
+            if target.shape != source.shape:
+                raise ValueError(f"{keras_name}: shape {tuple(source.shape)} does not fit {tuple(target.shape)}")
+            with torch.no_grad():
+                target.copy_(source)
