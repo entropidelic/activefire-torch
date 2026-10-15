@@ -25,8 +25,7 @@ def write_tif(path, array):
 
 
 def test_read_image_picks_bands_by_name(tmp_path):
-    # Fill band number i (counting from 0) with the value i, so the result
-    # shows which bands were read.
+    # Band i holds the value i, so the output shows which bands were read.
     image = np.stack([np.full((4, 4), i, dtype=np.uint16) for i in range(len(BANDS_IN_FILE))])
     path = tmp_path / "image.tif"
     write_tif(path, image)
@@ -50,9 +49,8 @@ def test_read_mask_returns_2d(tmp_path):
 
 
 def write_split_file(folder):
-    """Three tiny patches, every pixel of every band set to one value:
-    two training patches (100 and 300) and one test patch (60000).
-    Only patch "a" has a Schroeder mask file (all fire)."""
+    """Patches a (train, all pixels 100), b (train, 300), c (test, 60000).
+    Only a has a Schroeder mask (all fire)."""
     rows = []
     for name, value, split in [("a", 100, "train"), ("b", 300, "train"), ("c", 60000, "test")]:
         path = folder / f"{name}.tif"
@@ -94,7 +92,7 @@ def test_max_scaling_divides_by_65535(tmp_path):
 def test_band_stats_come_from_training_patches_only(tmp_path):
     split_file = write_split_file(tmp_path)
     stats = compute_band_stats(split_file, ["B7"], "schroeder", "full")
-    # Only 100 and 300 count; the test patch (60000) is ignored.
+    # Only the training patches (100 and 300) count.
     assert stats["B7"]["mean"] == pytest.approx(200)
     assert stats["B7"]["std"] == pytest.approx(100)
 
@@ -112,10 +110,8 @@ def test_band_stats_use_the_same_patches_as_training(tmp_path):
 
 
 def write_one_fire_patch(folder):
-    """One training patch with a single fire pixel at row 0, column 1.
-    The image is bright only at that pixel, and the mask is 1 only there.
-    (On a 4 x 4 patch, each of the 8 turns and mirrors puts that pixel in a
-    different place.)"""
+    """One 4 x 4 training patch, bright and on fire only at (0, 1). Each of the
+    8 rotations and mirrors moves that pixel to a different place."""
     image = np.zeros((10, 4, 4), dtype=np.uint16)
     image[:, 0, 1] = 1000
     mask = np.zeros((1, 4, 4), dtype=np.uint8)
@@ -145,12 +141,9 @@ def test_augmentation_moves_image_and_mask_together(tmp_path):
     fire_positions = set()
     for _ in range(100):
         image, mask = dataset[0]
-        # The bright image pixel is exactly where the mask says fire.
-        assert torch.equal(image[0] > 0, mask[0] == 1)
-        # Pixels are only moved, never changed.
-        assert image.max().item() == pytest.approx(1000 / 65535)
+        assert torch.equal(image[0] > 0, mask[0] == 1)  # moved together
+        assert image.max().item() == pytest.approx(1000 / 65535)  # values unchanged
         row, column = mask[0].nonzero()[0].tolist()
         fire_positions.add((row, column))
 
-    # All 8 turns and mirrors happened.
-    assert len(fire_positions) == 8
+    assert len(fire_positions) == 8  # every rotation and mirror occurred

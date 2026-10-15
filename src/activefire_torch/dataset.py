@@ -1,4 +1,4 @@
-"""Give PyTorch the patches one at a time: an image and its fire mask."""
+"""PyTorch dataset of (image, fire mask) patches."""
 
 import numpy as np
 import pandas as pd
@@ -6,48 +6,41 @@ import rasterio
 import torch
 from torch.utils.data import Dataset
 
-# The order of the 10 bands inside every image file. Band 8 (panchromatic) is
-# not stored, so the 8th band in the file is Landsat B9 (docs/paper_notes.md §2).
+# Band order in the image files. B8 (panchromatic) is not stored, so file
+# band 8 is B9 (docs/paper_notes.md §2).
 BANDS_IN_FILE = ("B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11")
 
-# The largest value a pixel can have (the files store 16-bit whole numbers).
+# Images are uint16; the original divides by this.
 MAX_VALUE = 65535
 
 
 def read_image(path, bands=None):
-    """Read an image patch as an array of shape [bands, height, width].
-
-    Values are returned as stored (no scaling). Pick bands by name, e.g.
-    bands=["B7", "B6", "B2"], so file positions never have to be counted by
-    hand. None reads all 10.
-    """
+    """Raw values as [bands, height, width]. bands: names, e.g. ["B7", "B6", "B2"];
+    None reads all 10."""
     with rasterio.open(path) as src:
         if bands is None:
             return src.read()
         for band in bands:
             if band not in BANDS_IN_FILE:
                 raise ValueError(f"Unknown band {band!r}; the file has {BANDS_IN_FILE}")
-        # rasterio counts bands from 1, Python from 0.
+        # rasterio band indices start at 1.
         return src.read([BANDS_IN_FILE.index(band) + 1 for band in bands])
 
 
 def read_mask(path):
-    """Read a mask patch as an array of shape [height, width] (1 = fire, 0 = no fire)."""
+    """Mask as [height, width], 1 = fire."""
     with rasterio.open(path) as src:
         return src.read(1)
 
 
 def select_rows(split_file, split, mask_source, version):
-    """The rows of a split file that a dataset uses.
+    """Rows of a split file used by one dataset.
 
     split        "train", "val" or "test"
     mask_source  e.g. "voting"
-    version      "fire_only"  only patches with a mask file from mask_source,
-                              as the original did
-                 "full"       every patch; patches without a mask file get
-                              an all-zero mask. In this dataset those are
-                              patches where only another algorithm found
-                              fire (docs/DECISIONS.md D16)
+    version      "fire_only": only patches with a mask from mask_source, as in
+                 the original. "full": all patches; those without a mask get an
+                 all-zero mask (patches where only other sources found fire, D16).
     """
     if version not in ("fire_only", "full"):
         raise ValueError(f"Unknown version {version!r}; use 'fire_only' or 'full'")
@@ -56,24 +49,20 @@ def select_rows(split_file, split, mask_source, version):
     rows = table[table["split"] == split]
     if version == "fire_only":
         rows = rows[rows[f"mask_{mask_source}"].notna()]
-    # Number the remaining rows 0, 1, 2, ...
     return rows.reset_index(drop=True)
 
 
 def compute_band_stats(split_file, bands, mask_source, version):
-    """The average and spread (standard deviation) of each band, over every
-    pixel of the training patches.
+    """Per-band mean and std over all pixels of the training patches.
 
-    Only the patches used for training count (same mask_source and version
-    as the training dataset): if validation or test patches were included,
-    the model would get a small hint about them.
+    Uses the same rows as the training dataset (same mask_source and version);
+    val and test are excluded to avoid leakage.
 
     Returns e.g. {"B7": {"mean": 10061.2, "std": 4052.3}, ...}
     """
     train_rows = select_rows(split_file, "train", mask_source, version)
 
-    # Add up, per band, the values and the squared values of every pixel.
-    # The images are read one at a time, so they never all sit in memory.
+    # Running sums, one image at a time, so the images never all sit in memory.
     total = np.zeros(len(bands))
     total_of_squares = np.zeros(len(bands))
     pixel_count = 0
@@ -84,27 +73,23 @@ def compute_band_stats(split_file, bands, mask_source, version):
         pixel_count += image.shape[1] * image.shape[2]
 
     mean = total / pixel_count
-    # Variance = average of the squares - square of the average.
-    std = np.sqrt(total_of_squares / pixel_count - mean**2)
+    std = np.sqrt(total_of_squares / pixel_count - mean**2)  # var = E[x^2] - E[x]^2
     return {band: {"mean": float(mean[i]), "std": float(std[i])} for i, band in enumerate(bands)}
 
 
 class FireDataset(Dataset):
-    """The patches of one split (train, val or test).
+    """Patches of one split.
 
-    split_file   a CSV made by splits.py, e.g. data/splits/scene.csv
+    split_file   CSV from splits.py, e.g. data/splits/scene.csv
     split        "train", "val" or "test"
-    bands        which bands to read, e.g. ["B7", "B6", "B2"]
-    mask_source  whose masks to use, e.g. "schroeder" (reads the column mask_schroeder)
-    version      "fire_only" or "full": which patches to include (see select_rows)
-    scaling      how to turn the raw values into small numbers:
-                   "max"          divide by 65535, as the original did (values 0 to 1)
-                   "standardize"  subtract each band's average and divide by its
-                                  spread (needs band_stats)
-    band_stats   from compute_band_stats(); always from the training split,
-                 also when this dataset is val or test
-    augment      True: turn and mirror each patch at random every time it is
-                 loaded. Only for training; val and test stay unchanged.
+    bands        e.g. ["B7", "B6", "B2"]
+    mask_source  e.g. "schroeder" (column mask_schroeder)
+    version      "fire_only" or "full" (see select_rows)
+    scaling      "max": divide by 65535, as the original.
+                 "standardize": per band, (x - mean) / std; needs band_stats.
+    band_stats   from compute_band_stats() on the training split, also for
+                 val and test
+    augment      random 90° rotations and mirroring; training only
     """
 
     def __init__(self, split_file, split, bands, mask_source, version, scaling="max", band_stats=None, augment=False):
@@ -120,57 +105,41 @@ class FireDataset(Dataset):
         if scaling == "standardize":
             if band_stats is None:
                 raise ValueError("scaling='standardize' needs band_stats from compute_band_stats()")
-            # Shape [bands, 1, 1], so that each band's number is applied to
-            # every pixel of that band of a [bands, 256, 256] image.
+            # Shape [bands, 1, 1] to broadcast over [bands, height, width].
             self.mean = np.array([band_stats[band]["mean"] for band in bands], dtype=np.float32).reshape(-1, 1, 1)
             self.std = np.array([band_stats[band]["std"] for band in bands], dtype=np.float32).reshape(-1, 1, 1)
 
     def __len__(self):
-        """How many patches there are. PyTorch uses this to know when an epoch ends."""
         return len(self.rows)
 
     def __getitem__(self, index):
-        """Patch number `index`, as (image, mask).
-
-        image: float tensor [bands, 256, 256], scaled
-        mask:  float tensor [1, 256, 256], 1 = fire, 0 = no fire
-        """
+        """(image [bands, H, W] float32 scaled, mask [1, H, W] float32 in {0, 1})."""
         row = self.rows.iloc[index]
 
-        # Read the bands and turn them into decimal numbers.
         image = read_image(row["image"], self.bands).astype(np.float32)
 
-        # No mask file means the mask source found no fire in this patch.
+        # No mask file: this source found no fire in the patch.
         if pd.isna(row[self.mask_column]):
             mask = np.zeros(image.shape[1:], dtype=np.uint8)
         else:
             mask = read_mask(row[self.mask_column])
 
-        # Make the values small (around 0 to 1), which is what the network's
-        # starting weights and learning rate are made for.
         if self.scaling == "max":
             image = image / MAX_VALUE
         else:
             image = (image - self.mean) / self.std
 
-        # Convert to PyTorch tensors.
         image = torch.from_numpy(image)
-        # The model outputs [1, 256, 256] (one "fire" channel), so the mask
-        # gets the same shape: add a first dimension of size 1.
+        # [1, H, W], the same shape as the model output.
         mask = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0)
 
-        # Augmentation: turn and mirror the patch at random. Both image and
-        # mask have the shape [channels, height, width], so turning dims 1
-        # and 2 (height and width) moves their pixels in exactly the same way,
-        # and the fire stays where it is. Pixel values are never changed.
+        # Same rotation and mirror for image and mask; pixel values unchanged.
         if self.augment:
-            quarter_turns = int(torch.randint(0, 4, (1,)))  # 0, 1, 2 or 3
+            quarter_turns = int(torch.randint(0, 4, (1,)))
             image = torch.rot90(image, quarter_turns, dims=(1, 2))
             mask = torch.rot90(mask, quarter_turns, dims=(1, 2))
 
-            mirror = bool(torch.rand(1) < 0.5)  # a coin flip
-            if mirror:
-                # Mirror left-to-right (dim 2 is the width).
+            if torch.rand(1) < 0.5:
                 image = torch.flip(image, dims=(2,))
                 mask = torch.flip(mask, dims=(2,))
 
