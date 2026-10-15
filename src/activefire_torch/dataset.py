@@ -103,9 +103,11 @@ class FireDataset(Dataset):
                                   spread (needs band_stats)
     band_stats   from compute_band_stats(); always from the training split,
                  also when this dataset is val or test
+    augment      True: turn and mirror each patch at random every time it is
+                 loaded. Only for training; val and test stay unchanged.
     """
 
-    def __init__(self, split_file, split, bands, mask_source, version, scaling="max", band_stats=None):
+    def __init__(self, split_file, split, bands, mask_source, version, scaling="max", band_stats=None, augment=False):
         if scaling not in ("max", "standardize"):
             raise ValueError(f"Unknown scaling {scaling!r}; use 'max' or 'standardize'")
 
@@ -113,6 +115,7 @@ class FireDataset(Dataset):
         self.bands = bands
         self.mask_column = f"mask_{mask_source}"
         self.scaling = scaling
+        self.augment = augment
 
         if scaling == "standardize":
             if band_stats is None:
@@ -155,4 +158,20 @@ class FireDataset(Dataset):
         # The model outputs [1, 256, 256] (one "fire" channel), so the mask
         # gets the same shape: add a first dimension of size 1.
         mask = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0)
+
+        # Augmentation: turn and mirror the patch at random. Both image and
+        # mask have the shape [channels, height, width], so turning dims 1
+        # and 2 (height and width) moves their pixels in exactly the same way,
+        # and the fire stays where it is. Pixel values are never changed.
+        if self.augment:
+            quarter_turns = int(torch.randint(0, 4, (1,)))  # 0, 1, 2 or 3
+            image = torch.rot90(image, quarter_turns, dims=(1, 2))
+            mask = torch.rot90(mask, quarter_turns, dims=(1, 2))
+
+            mirror = bool(torch.rand(1) < 0.5)  # a coin flip
+            if mirror:
+                # Mirror left-to-right (dim 2 is the width).
+                image = torch.flip(image, dims=(2,))
+                mask = torch.flip(mask, dims=(2,))
+
         return image, mask

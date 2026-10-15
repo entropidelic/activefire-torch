@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import rasterio
+import torch
 from rasterio.transform import from_origin
 
 from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, compute_band_stats, read_image, read_mask
@@ -108,3 +109,48 @@ def test_band_stats_use_the_same_patches_as_training(tmp_path):
     # With fire_only, only "a" (100) is a training patch.
     stats = compute_band_stats(split_file, ["B7"], "schroeder", "fire_only")
     assert stats["B7"]["mean"] == pytest.approx(100)
+
+
+def write_one_fire_patch(folder):
+    """One training patch with a single fire pixel at row 0, column 1.
+    The image is bright only at that pixel, and the mask is 1 only there.
+    (On a 4 x 4 patch, each of the 8 turns and mirrors puts that pixel in a
+    different place.)"""
+    image = np.zeros((10, 4, 4), dtype=np.uint16)
+    image[:, 0, 1] = 1000
+    mask = np.zeros((1, 4, 4), dtype=np.uint8)
+    mask[0, 0, 1] = 1
+    write_tif(folder / "image.tif", image)
+    write_tif(folder / "mask.tif", mask)
+
+    row = {"image": str(folder / "image.tif"), "split": "train", "mask_schroeder": str(folder / "mask.tif")}
+    split_file = folder / "split.csv"
+    pd.DataFrame([row]).to_csv(split_file, index=False)
+    return split_file
+
+
+def test_no_augmentation_by_default(tmp_path):
+    split_file = write_one_fire_patch(tmp_path)
+    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", "fire_only")
+    for _ in range(10):
+        _, mask = dataset[0]
+        assert mask[0, 0, 1] == 1  # the fire pixel never moves
+
+
+def test_augmentation_moves_image_and_mask_together(tmp_path):
+    split_file = write_one_fire_patch(tmp_path)
+    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", "fire_only", augment=True)
+    torch.manual_seed(0)
+
+    fire_positions = set()
+    for _ in range(100):
+        image, mask = dataset[0]
+        # The bright image pixel is exactly where the mask says fire.
+        assert torch.equal(image[0] > 0, mask[0] == 1)
+        # Pixels are only moved, never changed.
+        assert image.max().item() == pytest.approx(1000 / 65535)
+        row, column = mask[0].nonzero()[0].tolist()
+        fire_positions.add((row, column))
+
+    # All 8 turns and mirrors happened.
+    assert len(fire_positions) == 8
