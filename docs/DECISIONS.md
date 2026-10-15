@@ -101,9 +101,9 @@ Every non-trivial decision in this project: what was decided, which alternatives
 
 ---
 
-## D9. Train and test only on patches with fire, as the original does (2026-10-12, Phase 2; Stage 2 test set extended in D13)
+## D9. Train and test only on patches with fire, as the original does (2026-10-12, Phase 2; Stage 2 test set extended in D13; finding corrected in D16)
 
-**Finding.** The original dataset stores a mask file only for patches where the algorithm detected fire ("in order to save some space", `src/utils/generate_nonfire_masks.py`). The original split script builds its patch list from the mask files (`src/utils/split_dataset.py`). So **the original models never saw a fire-free patch** during training, validation or the automatic test, even though most patches in the dataset have no fire. This is not stated in the paper.
+**Finding.** The original dataset stores a mask file only for patches where the algorithm detected fire ("in order to save some space", `src/utils/generate_nonfire_masks.py`). The original split script builds its patch list from the mask files (`src/utils/split_dataset.py`). So **the original models never saw a fire-free patch** during training, validation or the automatic test, even though most patches in the dataset have no fire. This is not stated in the paper. *(Correction, D16: the released dataset only contains patches where at least one algorithm found fire, so "fire-free" here means fire-free for that one source.)*
 
 **Decision.** Do the same: for each mask source, use only the patches that have a mask file for that source.
 
@@ -179,7 +179,7 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 
 1. **Independent changes plus one combined run.** T2–T13 are each compared against T1 only. Changes can interact, especially scaling, loss and threshold, so a final run (T14) combines every change judged an improvement and measures the combination directly.
 2. **Selection only on validation.** Thresholds and the winners for T14 are chosen on validation results, never on the test split or the manual set. Otherwise the reported test numbers would be optimistic, because the test set would have helped choose the model.
-3. **Fire-free patches in the test set.** In the original protocol, every test patch contains fire, so false alarms on fire-free terrain are only measured on the manual set (most of its 9,044 patches have no fire, and 3 of its 13 scenes have none). Split S therefore has a **full** version of validation and test that includes fire-free patches (as all-zero masks), and the test split is identical for every Stage 2 run. T1 is reported on both versions, to keep the link to Stage 1. This also makes T2 (fire-free training patches) measurable. **Caveat:** "fire-free" means the algorithm found no fire. If the model finds a real fire the algorithm missed, it counts as a false positive.
+3. **Fire-free patches in the test set.** In the original protocol, every test patch contains fire, so false alarms on fire-free terrain are only measured on the manual set (most of its 9,044 patches have no fire, and 3 of its 13 scenes have none). Split S therefore has a **full** version of validation and test that includes fire-free patches (as all-zero masks), and the test split is identical for every Stage 2 run. T1 is reported on both versions, to keep the link to Stage 1. This also makes T2 (fire-free training patches) measurable. **Caveat:** "fire-free" means the algorithm found no fire. If the model finds a real fire the algorithm missed, it counts as a false positive. *(Added 2026-10-15, D16: the dataset only has patches where some algorithm found fire, so these "fire-free" patches are cases where the algorithms disagree, not ordinary landscape.)*
 4. **Threshold-free metric.** Different losses and normalizations change how confident the model's outputs are, so comparing them at one fixed threshold is unfair. Every run therefore reports:
    - F1 at 0.25 (for comparison with the paper).
    - F1 at the threshold tuned on validation.
@@ -219,3 +219,17 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 - Splitting each region on its own guarantees that both regions have test locations, which T1b needs.
 
 **Cost.** The 40 / 10 / 50 proportions are of locations, so the share of patches in each split can differ a bit (on the 100-patch sample: 38 / 9 / 53). The real numbers are reported at Checkpoint A.
+
+---
+
+## D16. The dataset only has patches where some algorithm found fire (2026-10-15, Phase 2)
+
+**Finding.** The two regions have 5,231 image patches from 598 scenes: 8.7 per scene on average (1 to 119), where a full scene would give about 880. Every one of the 5,231 images has a mask from at least one of Schroeder, Murphy and Kumar-Roy. So only patches where at least one algorithm found fire were kept. This corrects D9, which assumed that "most patches in the dataset have no fire". Numbers in `docs/data_inspection.md`.
+
+**Consequences.**
+- **The "full" version (D13 rule 3) does not add ordinary landscape.** For a given mask source, its extra patches are ones where that source found nothing but another algorithm did: cases where the algorithms disagree. Results on it are described as "false alarms on patches where the algorithms disagree", never as false alarms on fire-free terrain.
+- **False alarms on ordinary landscape can only be measured on the manual set.** It has nearly complete scenes (9,044 patches from 13 scenes), three of them with no fire, and hand-drawn masks. Downloading it is needed before any claim about false alarms.
+- **T2** tests training with these disagreement patches, and is worded that way.
+- **Small training sets.** With voting masks, the fire-only set has 1,970 patches, so about 790 for training with the 40 / 10 / 50 split. Results will vary more between seeds, and more of them may come out inconclusive under the D13 decision rule. Adding a third region (same download script) is an option to decide at Checkpoint A, once per-region counts are known.
+
+**Why keep the full version anyway.** It is still the only automatic test where a patch can have no fire for the chosen source, and it costs nothing extra.
