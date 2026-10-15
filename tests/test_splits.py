@@ -69,6 +69,8 @@ def test_split_by_patch_is_40_10_50():
 
 def test_no_location_in_two_splits():
     split = split_by_location(fake_patches())
+    assert len(split) == len(fake_patches())
+    assert split.index.is_unique  # no repeated row numbers
     assert split["split"].notna().all()
     assert (split.groupby("pathrow")["split"].nunique() == 1).all()
     # Each region has locations in every split (needed for T1b).

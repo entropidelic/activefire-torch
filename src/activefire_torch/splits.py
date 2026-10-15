@@ -182,7 +182,9 @@ def split_by_location(patches: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
         locations = split_by_patch(locations, seed)
         # 3. Give each patch the split of its location.
         results.append(region_patches.merge(locations, on="pathrow"))
-    return pd.concat(results)
+    # Join the regions and number the rows 0, 1, 2, ... again (each region's
+    # part starts at 0, and repeated row numbers break later pandas steps).
+    return pd.concat(results, ignore_index=True)
 
 
 if __name__ == "__main__":
