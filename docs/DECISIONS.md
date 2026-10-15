@@ -255,3 +255,13 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 - Training takes roughly 3× longer.
 - South America will be most of the data, so pooled results mostly reflect it; per-region results are reported next to them.
 - Whether the location split still needs balancing, and whether T1b gets a third direction (e.g. train on two regions, test on South America), are decided once the real counts are in, before any training.
+
+## D18. Starting weights: He and Glorot, as in the original, without the cut-off (2026-10-15, Phase 3)
+
+**Original.** The convolutions inside each block use Keras `he_normal`. The transposed convolutions and the output convolution set nothing, so they get Keras's default, `glorot_uniform`. Biases start at 0 (Keras default). Source: `conv2d_block` and `get_unet` in the original `models.py`.
+
+**Decision.** Same in PyTorch: `kaiming_normal_(nonlinearity="relu")` for the block convolutions, `xavier_uniform_` for the others, biases 0. PyTorch's own defaults are not used.
+
+**Not copied.** Keras's `he_normal` is a *truncated* normal: values beyond 2 spreads are redrawn, and the spread is enlarged a little to make up for it. We use a plain normal. This only changes the rare largest starting values, and a different seed changes the starting weights far more than this does.
+
+**Why match at all.** Starting weights only affect training, not what a trained model computes, so R0 does not need this. It is copied because it is cheap, so a gap in R1 can't be blamed on it. It also matters for T7 (no BatchNorm): without BatchNorm, PyTorch's default would start about 2.4 times smaller than He, which can slow down learning in a network this deep.
