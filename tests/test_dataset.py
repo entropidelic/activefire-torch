@@ -1,9 +1,10 @@
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from activefire_torch.dataset import BANDS_IN_FILE, read_image, read_mask
+from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, compute_band_stats, read_image, read_mask
 
 
 def write_tif(path, array):
@@ -45,3 +46,40 @@ def test_read_mask_returns_2d(tmp_path):
     mask = read_mask(path)
     assert mask.shape == (4, 4)
     assert mask.dtype == np.uint8
+
+
+def write_split_file(folder):
+    """Three tiny patches, every pixel of every band set to one value:
+    two training patches (100 and 300) and one test patch (60000).
+    None of them has a mask file."""
+    rows = []
+    for name, value, split in [("a", 100, "train"), ("b", 300, "train"), ("c", 60000, "test")]:
+        path = folder / f"{name}.tif"
+        write_tif(path, np.full((10, 4, 4), value, dtype=np.uint16))
+        rows.append({"image": str(path), "split": split, "mask_schroeder": None})
+    split_file = folder / "split.csv"
+    pd.DataFrame(rows).to_csv(split_file, index=False)
+    return split_file
+
+
+def test_max_scaling_divides_by_65535(tmp_path):
+    split_file = write_split_file(tmp_path)
+    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", scaling="max")
+    image, mask = dataset[1]
+    assert image.shape == (1, 4, 4)
+    assert image[0, 0, 0].item() == pytest.approx(300 / 65535)
+    assert mask.shape == (1, 4, 4)
+    assert mask.sum() == 0  # no mask file -> no fire
+
+
+def test_band_stats_come_from_training_patches_only(tmp_path):
+    split_file = write_split_file(tmp_path)
+    stats = compute_band_stats(split_file, ["B7"])
+    # Only 100 and 300 count; the test patch (60000) is ignored.
+    assert stats["B7"]["mean"] == pytest.approx(200)
+    assert stats["B7"]["std"] == pytest.approx(100)
+
+    # The test set is scaled with the training numbers.
+    test_set = FireDataset(split_file, "test", ["B7"], "schroeder", scaling="standardize", band_stats=stats)
+    image, _ = test_set[0]
+    assert image[0, 0, 0].item() == pytest.approx((60000 - 200) / 100)
