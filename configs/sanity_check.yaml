@@ -1,0 +1,11 @@
+# Sanity check (plan 3.2): the model must nearly memorize 10 patches.
+# data/splits/sanity_schroeder.csv holds the 10 patches of the 100-patch sample
+# with the most Schroeder fire pixels, listed as both train and val.
+split_file: data/splits/sanity_schroeder.csv
+mask_source: schroeder
+version: fire_only
+bands: [B7, B6, B2]
+base_filters: 16
+batch_size: 2
+max_epochs: 400
+patience: 400  # no early stopping

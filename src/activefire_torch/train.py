@@ -235,6 +235,9 @@ def main() -> None:
             band_stats=band_stats,
             augment=config["augment"] and split == "train",
         )
+    if len(datasets["train"]) < config["batch_size"]:
+        # The last partial batch is skipped, so there would be no batch at all.
+        raise SystemExit(f"{len(datasets['train'])} training patches is less than one batch of {config['batch_size']}")
     workers = config["num_workers"]
     # Training: reshuffled every epoch, and the last partial batch is skipped,
     # as in the original (steps_per_epoch = patches // batch size).

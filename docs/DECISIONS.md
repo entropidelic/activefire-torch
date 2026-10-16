@@ -290,3 +290,22 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 
 **Cost.** 18 trainings (3 directions x (T1b + control) x 3 seeds), up from 12.
 
+## D21. Sanity check passed: the model memorizes 10 real patches (2026-10-15, Phase 3)
+
+**Setup.** `configs/sanity_check.yaml`: the 10 patches of the 100-patch sample with the most Schroeder fire pixels (440 in total), used as both training and validation set (`data/splits/sanity_schroeder.csv`). U-Net-Light (3c), the original's settings except batch size 2 and no early stopping. Run on this machine's Apple GPU, 165 seconds. Run record: `runs/sanity_check_seed0_20261015-221154/`.
+
+**Result.** Validation (= training) F1 at threshold 0.25:
+
+| Epoch | Weight updates | Precision | Recall | F1 | Average precision |
+|---|---|---|---|---|---|
+| 100 | 500 | 0.985 | 0.295 | 0.455 | 0.762 |
+| 200 | 1,000 | 0.858 | 0.932 | 0.893 | 0.958 |
+| 400 | 2,000 | 0.958 | 0.991 | 0.974 | 0.996 |
+
+The model, data reading, scaling, masks, loss, optimizer and metrics work together: the model can learn fire from these inputs.
+
+**Observations.**
+- A first attempt with batch size 5 (400 updates in 200 epochs) reached only F1 0.17: too few updates, not a bug. The loss was still falling, and was above what a constant "0.07% fire" prediction would give.
+- With fire at 0.07% of pixels, the model first learns "everything is background" (F1 0 for a while), then raises the fire pixels above 0.25.
+- With very few batches per epoch, the validation loss spikes early (to 19 in the first attempt): BatchNorm's running averages, used in evaluation, move only 1% per batch (Keras momentum). Real epochs have about 250 batches.
+
