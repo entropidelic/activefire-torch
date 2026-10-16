@@ -4,7 +4,7 @@ import pytest
 import torch
 from sklearn.metrics import average_precision_score, f1_score, jaccard_score, precision_score, recall_score
 
-from activefire_torch.metrics import BINS, PixelCounts, ScoreHistogram
+from activefire_torch.metrics import PixelCounts, ScoreHistogram
 
 
 def test_counts_and_scores_by_hand():
@@ -66,37 +66,39 @@ def test_scores_match_sklearn():
 
 
 def test_average_precision_by_hand():
-    probabilities = torch.tensor([0.9, 0.8, 0.7, 0.1])
+    logits = torch.tensor([2.0, 1.0, 0.5, -2.0])
     masks = torch.tensor([1.0, 0.0, 1.0, 0.0])
-    # Threshold below 0.9: 1 of 2 fires found, precision 1/1.
-    # Threshold below 0.7: 2 of 2 fires found, precision 2/3.
+    # Threshold below 2.0: 1 of 2 fires found, precision 1/1.
+    # Threshold below 0.5: 2 of 2 fires found, precision 2/3.
     histogram = ScoreHistogram()
-    histogram.add(probabilities, masks)
+    histogram.add(logits, masks)
     assert histogram.average_precision() == pytest.approx(0.5 * 1 + 0.5 * 2 / 3)
 
 
-def random_predictions():
-    """Masks with 10% fire, and noisy scores that are higher on fire pixels."""
+def test_average_precision_keeps_the_ranking_of_tiny_probabilities():
+    # One fire pixel ranked above 9,999 background pixels, all with
+    # probabilities below 0.001. Exact AP is 1; equal-width probability bins
+    # would put them all in one bin and give 0.0001.
+    logits = torch.cat([torch.tensor([-12.0]), torch.linspace(-20, -14, 9_999)])
+    masks = torch.zeros(10_000)
+    masks[0] = 1
+    histogram = ScoreHistogram()
+    histogram.add(logits, masks)
+    assert histogram.average_precision() == pytest.approx(1.0)
+
+
+def test_average_precision_matches_sklearn_on_realistic_scores():
+    # Like a trained model: background far below 0, most fire above 0, and 5%
+    # of the fire (missed fires) among the background. 0.5% of pixels are fire.
     torch.manual_seed(0)
-    masks = (torch.rand(4, 1, 64, 64) < 0.1).float()
-    probabilities = (0.3 * masks + 0.7 * torch.rand(4, 1, 64, 64)).clamp(0, 1)
-    return probabilities, masks
+    masks = (torch.rand(1_000_000) < 0.005).float()
+    logits = torch.randn(1_000_000) * 3 - 12
+    fire = masks == 1
+    found = fire & (torch.rand(1_000_000) < 0.95)
+    logits[found] = torch.randn(int(found.sum())) * 2 + 3
+    logits[fire & ~found] = torch.randn(int((fire & ~found).sum())) * 2 - 9
 
-
-def test_average_precision_matches_sklearn_on_binned_scores():
-    # With every score in the middle of a bin, binning loses nothing.
-    probabilities, masks = random_predictions()
-    probabilities = (torch.floor(probabilities * BINS) + 0.5) / BINS
     histogram = ScoreHistogram()
-    for i in range(4):
-        histogram.add(probabilities[i : i + 1], masks[i : i + 1])
-    expected = average_precision_score(masks.flatten().numpy(), probabilities.flatten().numpy())
-    assert histogram.average_precision() == pytest.approx(expected, abs=1e-9)
-
-
-def test_average_precision_is_close_to_sklearn_on_raw_scores():
-    probabilities, masks = random_predictions()
-    histogram = ScoreHistogram()
-    histogram.add(probabilities, masks)
-    expected = average_precision_score(masks.flatten().numpy(), probabilities.flatten().numpy())
+    histogram.add(logits, masks)
+    expected = average_precision_score(masks.numpy(), logits.double().numpy())
     assert histogram.average_precision() == pytest.approx(expected, abs=1e-3)

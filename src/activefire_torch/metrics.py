@@ -57,13 +57,17 @@ def divide(numerator: int, denominator: int) -> float:
 
 # Average precision needs precision and recall at every threshold. Sorting every
 # pixel by score does not fit in memory (billions of pixels on the test set), so
-# scores are counted into bins instead: bin i holds probabilities in
-# [i / BINS, (i + 1) / BINS), with 1.0 in the last bin.
-BINS = 1000
+# scores are counted into bins instead. The bins are over logits, not
+# probabilities: almost all background pixels have probabilities below 0.001,
+# which equal-width probability bins would lump into one bin (measured error
+# -0.0085 against exact AP; with these logit bins, -0.00003). Logits outside
+# [-LOGIT_LIMIT, LOGIT_LIMIT] go into the first or last bin.
+BINS = 10_000
+LOGIT_LIMIT = 40.0
 
 
 class ScoreHistogram:
-    """Running count of fire and background pixels per score bin.
+    """Running count of fire and background pixels per logit bin.
     Call add() once per batch, then average_precision()."""
 
     def __init__(self, bins: int = BINS) -> None:
@@ -71,16 +75,18 @@ class ScoreHistogram:
         self.fire = torch.zeros(bins, dtype=torch.int64)
         self.background = torch.zeros(bins, dtype=torch.int64)
 
-    def add(self, probabilities: torch.Tensor, masks: torch.Tensor) -> None:
-        """probabilities and masks of the same shape, e.g. [N, 1, H, W]; masks in {0, 1}."""
-        bin_index = (probabilities * self.bins).long().clamp(max=self.bins - 1).flatten().cpu()
+    def add(self, logits: torch.Tensor, masks: torch.Tensor) -> None:
+        """logits (the model's outputs, before the sigmoid) and masks of the same
+        shape, e.g. [N, 1, H, W]; masks in {0, 1}."""
+        position = (logits + LOGIT_LIMIT) / (2 * LOGIT_LIMIT)  # 0 at -LOGIT_LIMIT, 1 at +LOGIT_LIMIT
+        bin_index = (position * self.bins).floor().long().clamp(0, self.bins - 1).flatten().cpu()
         fire = (masks == 1).flatten().cpu()
         self.fire += torch.bincount(bin_index[fire], minlength=self.bins)
         self.background += torch.bincount(bin_index[~fire], minlength=self.bins)
 
     def average_precision(self) -> float:
         """Area under the precision-recall curve, as sklearn's average_precision_score
-        with scores rounded down to bin edges. nan if there is no fire.
+        with logits rounded down to bin edges. nan if there is no fire.
 
         The threshold moves down one bin at a time. Each step adds that bin's
         pixels to the predicted fire: recall grows by the bin's share of all

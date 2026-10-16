@@ -183,7 +183,7 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 4. **Threshold-free metric.** Different losses and normalizations change how confident the model's outputs are, so comparing them at one fixed threshold is unfair. Every run therefore reports:
    - F1 at 0.25 (for comparison with the paper).
    - F1 at the threshold tuned on validation.
-   - **Average precision** (area under the precision-recall curve). It is computed from a 1,000-bin histogram of scores accumulated over the whole set, because exact computation over billions of pixels does not fit in memory.
+   - **Average precision** (area under the precision-recall curve). It is computed from a histogram of scores accumulated over the whole set, because exact computation over billions of pixels does not fit in memory. (Corrected in D22: 10,000 bins over logits, not 1,000 over probabilities.)
 5. **Primary metric:** average precision on the full test split.
 6. **Decision rule:**
    - With 3 seeds per configuration, a change counts as an improvement or a degradation only if the difference in mean primary metric is **larger than the standard deviation of both configurations**. Otherwise it is **inconclusive**.
@@ -296,6 +296,8 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 
 **Result.** Validation (= training) F1 at threshold 0.25:
 
+AP in this table was computed with the original 1,000 probability bins, which underestimate AP (D22); precision, recall and F1 are exact.
+
 | Epoch | Weight updates | Precision | Recall | F1 | Average precision |
 |---|---|---|---|---|---|
 | 100 | 500 | 0.985 | 0.295 | 0.455 | 0.762 |
@@ -308,4 +310,14 @@ The model, data reading, scaling, masks, loss, optimizer and metrics work togeth
 - A first attempt with batch size 5 (400 updates in 200 epochs) reached only F1 0.17: too few updates, not a bug. The loss was still falling, and was above what a constant "0.07% fire" prediction would give.
 - With fire at 0.07% of pixels, the model first learns "everything is background" (F1 0 for a while), then raises the fire pixels above 0.25.
 - With very few batches per epoch, the validation loss spikes early (to 19 in the first attempt): BatchNorm's running averages, used in evaluation, move only 1% per batch (Keras momentum). Real epochs have about 250 batches.
+
+## D22. Average precision bins logits, not probabilities (2026-10-15, after a code review)
+
+**Problem (found by a reviewer, confirmed).** The AP histogram used 1,000 equal-width bins over probabilities. After training, almost all background pixels have probabilities below 0.001 (99.6% on the 117 manual sample patches with the authors' U-Net-Light), so they share the first bin with any fire pixels scored that low, and their ranking is lost. Measured on those patches: exact AP (scikit-learn) 0.9344, histogram AP 0.9259 (error -0.0085). That is about as large as the R0 vs. R1 difference first reported (0.011), so those AP values were not reliable.
+
+**Decision.** Bin the model's logits instead: 10,000 equal-width bins over [-40, 40], values outside going to the end bins. Same patches: 0.9344 (error -0.00003). Precision, recall, F1 and IoU were never affected (exact counts).
+
+**Consequences.**
+- AP values computed before this change (R0, R1 seed 0, the sanity check in D21) are recomputed or marked.
+- Tests now use the failing cases: one fire pixel ranked above many background pixels with tiny probabilities, and realistic skewed scores compared with scikit-learn's exact AP. Both fail with the old binning.
 

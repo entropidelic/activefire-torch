@@ -53,9 +53,10 @@ def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device,
     start_time = time.perf_counter()
     with torch.inference_mode():
         for batch_number, (images, masks) in enumerate(loader):
-            probabilities = torch.sigmoid(model(images.to(device))).cpu()
+            logits = model(images.to(device)).cpu()
+            probabilities = torch.sigmoid(logits)
             counts.add(probabilities, masks)
-            histogram.add(probabilities, masks)
+            histogram.add(logits, masks)
 
             first_row = batch_number * BATCH_SIZE
             fire_free = in_fire_free_scene[first_row : first_row + len(images)]

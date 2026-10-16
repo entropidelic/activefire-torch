@@ -128,8 +128,9 @@ For each row of a split file, `FireDataset` returns an image and its mask:
 - **Metrics:** fire pixels are counted (TP, FP, FN) over the whole evaluation
   set and the scores computed once, as the original does. A pixel is fire
   when its probability is above 0.25, the paper's threshold. Average
-  precision uses a 1,000-bin histogram of scores, because sorting billions of
-  pixels does not fit in memory.
+  precision uses a 10,000-bin histogram of the model's logits, because sorting
+  billions of pixels does not fit in memory (within 0.0001 of the exact value
+  on real predictions; D22).
 
 ## 7. Check: the authors' trained models in our pipeline (R0)
 

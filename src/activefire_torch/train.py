@@ -95,7 +95,7 @@ def validate(model: nn.Module, loader: DataLoader, loss_function: nn.Module, dev
 
             probabilities = torch.sigmoid(logits)
             counts.add(probabilities, masks)
-            histogram.add(probabilities, masks)
+            histogram.add(logits, masks)
     return {"loss": total_loss / patches, **counts.scores(), "average_precision": histogram.average_precision()}
 
 
