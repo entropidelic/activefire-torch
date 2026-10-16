@@ -6,6 +6,7 @@ Run from the repo root:
 """
 
 import argparse
+import hashlib
 import random
 import subprocess
 import time
@@ -308,6 +309,8 @@ def main() -> None:
     if not args.resume:
         run_record.update({
             "code_version": git_commit(),
+            # The split files are not in git; this identifies the exact split.
+            "split_file_sha256": hashlib.sha256(Path(config["split_file"]).read_bytes()).hexdigest()[:16],
             "device": describe_device(device),
             "train_patches": len(datasets["train"]),
             "val_patches": len(datasets["val"]),
