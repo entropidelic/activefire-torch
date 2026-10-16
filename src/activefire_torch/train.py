@@ -1,8 +1,8 @@
 """Training. Defaults copy the original train.py (docs/paper_notes.md §7).
 
 Run from the repo root:
-    uv run python -m activefire_torch.train configs/<run>.yaml [--seed 1]
-    uv run python -m activefire_torch.train --resume runs/<run folder>   # after an interruption
+    uv run train configs/<run>.yaml [--seed 1]
+    uv run train --resume runs/<run folder>   # after an interruption
 """
 
 import argparse
@@ -244,7 +244,7 @@ def main() -> None:
     parser.add_argument("--resume", type=Path, help="run folder of an interrupted run, to continue it")
     args = parser.parse_args()
     if (args.config is None) == (args.resume is None):
-        parser.error("give either a config file or --resume, not both")
+        parser.error("give a config file, or --resume with a run folder (one of the two)")
 
     if args.resume:
         run_folder = args.resume

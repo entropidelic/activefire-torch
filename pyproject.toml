@@ -21,6 +21,9 @@ dependencies = [
     "wandb>=0.30.0",
 ]
 
+[project.scripts]
+train = "activefire_torch.train:main"  # uv run train <config> | uv run train --resume <run folder>
+
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
 build-backend = "uv_build"
