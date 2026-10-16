@@ -12,6 +12,7 @@ data/*
 # Run artifacts: keep config.yaml and history.csv; drop weights and the large
 # TensorBoard / W&B logs (tens of MB per run with example pictures)
 runs/*/weights*
+runs/*/checkpoint*
 runs/*/events*
 runs/*/wandb/
 

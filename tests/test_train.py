@@ -124,3 +124,30 @@ def test_same_seed_gives_the_same_run(tmp_path, monkeypatch):
     losses = ["train_loss", "val_loss"]
     assert first[losses].equals(second[losses])
     assert not first[losses].equals(other_seed[losses])
+
+
+def test_interrupted_run_resumes_where_it_stopped(tmp_path, monkeypatch):
+    images, masks = fake_batch()
+    opposite = DataLoader(TensorDataset(images, 1 - masks), batch_size=2)  # validation only gets worse
+    real_validate = train.validate
+    calls = 0
+
+    def validate_until_power_cut(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("power cut during epoch 3")
+        return real_validate(*args)
+
+    monkeypatch.setattr(train, "validate", validate_until_power_cut)
+    torch.manual_seed(0)
+    with pytest.raises(RuntimeError, match="power cut"):
+        fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
+    monkeypatch.setattr(train, "validate", real_validate)
+
+    history = fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
+    # Epochs 1-2 come from before the cut. Epoch 3 is the second worse epoch in
+    # a row only if the early-stopping counter was restored, so the run stops there.
+    assert [row["epoch"] for row in history] == [1, 2, 3]
+    assert pd.read_csv(tmp_path / "history.csv")["epoch"].tolist() == [1, 2, 3]
+    assert not (tmp_path / "checkpoint.pt").exists()

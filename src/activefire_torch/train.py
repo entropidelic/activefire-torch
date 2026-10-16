@@ -2,6 +2,7 @@
 
 Run from the repo root:
     uv run python -m activefire_torch.train configs/<run>.yaml [--seed 1]
+    uv run python -m activefire_torch.train --resume runs/<run folder>   # after an interruption
 """
 
 import argparse
@@ -118,7 +119,7 @@ def fit(
     max_epochs: int = MAX_EPOCHS,
     patience: int = PATIENCE,
     examples: tuple[torch.Tensor, torch.Tensor] | None = None,
-) -> list[dict[str, float]]:
+) -> list[dict]:
     """Train as the original does: Adam and binary cross-entropy, validating
     after every epoch, and stopping once the validation loss has not improved
     for `patience` epochs in a row (Keras EarlyStopping). As in the original,
@@ -126,6 +127,9 @@ def fit(
 
     Writes to run_folder:
         history.csv   one row per epoch, rewritten every epoch
+        checkpoint.pt everything needed to continue, rewritten every epoch;
+                      if it exists when fit() starts, training continues
+                      from it. Deleted when the run finishes.
         weights.pt    the final weights (state_dict)
         events.*      TensorBoard log (tensorboard --logdir runs); with
                       examples = (images, masks), also pictures of the
@@ -135,18 +139,34 @@ def fit(
     Returns the rows of history.csv: epoch, seconds, train_loss, and
     val_<score> for every score from validate().
     """
+    if (run_folder / "weights.pt").exists():
+        raise ValueError(f"{run_folder} is a finished run")
     run_folder.mkdir(parents=True, exist_ok=True)
     model.to(device)
     loss_function = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, eps=ADAM_EPS)
 
-    history = []
+    history: list[dict] = []
     best_val_loss = float("inf")
     epochs_without_improvement = 0
+    first_epoch = 1
+    checkpoint_file = run_folder / "checkpoint.pt"
+    if checkpoint_file.exists():
+        # Continue an interrupted run. The random state (shuffling, dropout)
+        # is not restored, so the rest of the run is not bit-for-bit what it
+        # would have been.
+        checkpoint = torch.load(checkpoint_file, map_location=device)
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])  # Adam's running averages
+        best_val_loss = checkpoint["best_val_loss"]
+        epochs_without_improvement = checkpoint["epochs_without_improvement"]
+        first_epoch = checkpoint["epoch"] + 1
+        history = pd.read_csv(run_folder / "history.csv").to_dict("records")[: checkpoint["epoch"]]
+        print(f"Resuming {run_folder} after epoch {checkpoint['epoch']}")
     # `with` closes the TensorBoard log even if training crashes, so the
     # epochs done so far are kept.
     with SummaryWriter(run_folder) as writer:
-        for epoch in range(1, max_epochs + 1):
+        for epoch in range(first_epoch, max_epochs + 1):
             start = time.perf_counter()
             train_loss = train_one_epoch(model, train_loader, loss_function, optimizer, device)
             scores = validate(model, val_loader, loss_function, device)
@@ -155,7 +175,10 @@ def fit(
             row = {"epoch": epoch, "seconds": seconds, "train_loss": train_loss}
             row.update({f"val_{name}": value for name, value in scores.items()})
             history.append(row)
-            pd.DataFrame(history).to_csv(run_folder / "history.csv", index=False)
+            # Written to a temporary file, then renamed: a rename is all or
+            # nothing, so an interruption mid-write cannot leave a broken file.
+            pd.DataFrame(history).to_csv(run_folder / "history.tmp", index=False)
+            (run_folder / "history.tmp").replace(run_folder / "history.csv")
             writer.add_scalar("loss/train", train_loss, epoch)
             writer.add_scalar("loss/val", scores["loss"], epoch)
             for name in ["precision", "recall", "f1", "iou", "average_precision"]:
@@ -175,11 +198,23 @@ def fit(
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
-                if epochs_without_improvement >= patience:
-                    print(f"Stopping: no lower validation loss in the last {patience} epochs")
-                    break
+
+            checkpoint = {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "epoch": epoch,
+                "best_val_loss": best_val_loss,
+                "epochs_without_improvement": epochs_without_improvement,
+            }
+            torch.save(checkpoint, run_folder / "checkpoint.tmp")
+            (run_folder / "checkpoint.tmp").replace(checkpoint_file)
+
+            if epochs_without_improvement >= patience:
+                print(f"Stopping: no lower validation loss in the last {patience} epochs")
+                break
 
     torch.save(model.state_dict(), run_folder / "weights.pt")
+    checkpoint_file.unlink()
     return history
 
 
@@ -203,13 +238,25 @@ def git_commit() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a U-Net from a config file.")
-    parser.add_argument("config", type=Path, help="YAML file in configs/")
+    parser.add_argument("config", type=Path, nargs="?", help="YAML file in configs/")
     parser.add_argument("--seed", type=int, help="overrides the config's seed")
+    parser.add_argument("--resume", type=Path, help="run folder of an interrupted run, to continue it")
     args = parser.parse_args()
+    if (args.config is None) == (args.resume is None):
+        parser.error("give either a config file or --resume, not both")
 
-    config = read_config(args.config)
-    if args.seed is not None:
-        config["seed"] = args.seed
+    if args.resume:
+        run_folder = args.resume
+        # The settings the run started with, saved in its folder.
+        run_record = yaml.safe_load((run_folder / "config.yaml").read_text())
+        config = {name: run_record[name] for name in REQUIRED_SETTINGS + list(DEFAULT_SETTINGS)}
+    else:
+        config = read_config(args.config)
+        if args.seed is not None:
+            config["seed"] = args.seed
+        started = datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_folder = RUNS_FOLDER / f"{args.config.stem}_seed{config['seed']}_{started}"
+        run_record = {**config, "config_file": str(args.config), "started": started}
 
     # Seeds every random choice: starting weights, dropout, shuffling and
     # augmentation (also in DataLoader workers). Runs on the Apple GPU are
@@ -258,20 +305,16 @@ def main() -> None:
     largest = sorted(fire_pixels, key=lambda i: fire_pixels[i], reverse=True)[:4]
     examples = (torch.stack([val[i][0] for i in largest]), torch.stack([val[i][1] for i in largest]))
 
-    started = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_folder = RUNS_FOLDER / f"{args.config.stem}_seed{config['seed']}_{started}"
-    run_folder.mkdir(parents=True)
-    run_record = {
-        **config,
-        "config_file": str(args.config),
-        "started": started,
-        "code_version": git_commit(),
-        "device": describe_device(device),
-        "train_patches": len(datasets["train"]),
-        "val_patches": len(datasets["val"]),
-        "band_stats": band_stats,
-    }
-    (run_folder / "config.yaml").write_text(yaml.safe_dump(run_record, sort_keys=False))
+    if not args.resume:
+        run_record.update({
+            "code_version": git_commit(),
+            "device": describe_device(device),
+            "train_patches": len(datasets["train"]),
+            "val_patches": len(datasets["val"]),
+            "band_stats": band_stats,
+        })
+        run_folder.mkdir(parents=True)
+        (run_folder / "config.yaml").write_text(yaml.safe_dump(run_record, sort_keys=False))
     print(f"Run {run_folder}: {len(datasets['train'])} training and {len(datasets['val'])} validation patches "
           f"on {describe_device(device)}")
 
