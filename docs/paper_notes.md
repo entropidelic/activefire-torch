@@ -194,10 +194,11 @@ The abstract's "87.2% precision and 92.4% recall" is the **Voting / U-Net-Light 
 ### What this project compares against
 
 - **Main comparison mask: Voting.** It is the source of the paper's headline result and the best performer on the manual set. Baseline runs (plan Phase 3.4) use Voting masks, and Table 2/3 Voting rows are the reference numbers.
-- Our numbers will not be directly comparable, for these reasons (detailed in `results/replication.md` later):
-  1. We train on 2 of 11 regions.
-  2. We split by scene, not by patch. This is stricter and removes optimistic leakage between train and test.
-  3. Our test split is a different set of patches.
+- Our numbers will not be directly comparable, for these reasons (updated 2026-10-15; an earlier version said 2 regions and scene splits):
+  1. We train on 3 of 11 regions (D8, D17).
+  2. Stage 1 copies the original's random patch split (Split P). Stage 2 splits by location (Split S, D15), which is stricter: no test location is seen in training.
+  3. Our test split is a different set of patches, so comparisons with Table 2 are approximate. The manual set (Table 3) is the same data as the paper's.
+  4. 2 of the 13 manual-set locations (44 patches) also appear in our training regions (`data_inspection.md`).
 
 ## 11. Limitations and known failure cases stated in the paper
 

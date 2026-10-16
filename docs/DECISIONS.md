@@ -189,6 +189,7 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
    - With 3 seeds per configuration, a change counts as an improvement or a degradation only if the difference in mean primary metric is **larger than the standard deviation of both configurations**. Otherwise it is **inconclusive**.
    - With 3 seeds the standard deviation is itself uncertain, so this rule is deliberately simple. The seed variation on MPS also includes non-determinism (D6).
    - A configuration run with only 1 seed is always inconclusive.
+   - *(Added 2026-10-15, after a code review.)* This rule is a heuristic, not a test of statistical significance. Differences are also reported per seed (seed 0 against seed 0, and so on): the same seed gives both configurations the same starting weights and data order, so these paired differences are less noisy than differences of means.
 7. **Inference cost.** The averaging and ensemble options (T11 seeds, T12 flips, T13 per-mask models) report their inference cost (3×, 8×, 3×) next to their gain. How much that matters depends on the sensor: Landsat revisits a place every 16 days, so data volume matters more than latency, while geostationary sensors deliver images every few minutes.
 8. **Manual-set overlap.** The manual scenes are from September and the training scenes from August, so full scene IDs cannot match. The real risk is the same location on a different date, e.g. the same industrial heat source. Overlap is therefore checked by **WRS path/row**. In Stage 1 it is reported next to the comparison with the paper; in Stage 2, overlapping path/rows are excluded from training.
 
@@ -256,13 +257,13 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 - South America will be most of the data, so pooled results mostly reflect it; per-region results are reported next to them.
 - Whether the location split still needs balancing, and whether T1b gets a third direction (e.g. train on two regions, test on South America), are decided once the real counts are in, before any training.
 
-## D18. Starting weights: He and Glorot, as in the original, without the cut-off (2026-10-15, Phase 3)
+## D18. Starting weights: He and Glorot, as in the original, without the truncation (2026-10-15, Phase 3)
 
 **Original.** The convolutions inside each block use Keras `he_normal`. The transposed convolutions and the output convolution set nothing, so they get Keras's default, `glorot_uniform`. Biases start at 0 (Keras default). Source: `conv2d_block` and `get_unet` in the original `models.py`.
 
 **Decision.** Same in PyTorch: `kaiming_normal_(nonlinearity="relu")` for the block convolutions, `xavier_uniform_` for the others, biases 0. PyTorch's own defaults are not used.
 
-**Not copied.** Keras's `he_normal` is a *truncated* normal: values beyond 2 spreads are redrawn, and the spread is enlarged a little to make up for it. We use a plain normal. This only changes the rare largest starting values, and a different seed changes the starting weights far more than this does.
+**Not copied.** Keras's `he_normal` is a *truncated* normal: values more than 2 standard deviations from 0 are redrawn, and the standard deviation is enlarged a little to make up for it. We use a plain normal. This only changes the rare largest starting values. We assume its effect is smaller than the difference between seeds; this was not measured.
 
 **Why match at all.** Starting weights only affect training, not what a trained model computes, so R0 does not need this. It is copied because it is cheap, so a gap in R1 can't be blamed on it. It also matters for T7 (no BatchNorm): without BatchNorm, PyTorch's default would start about 2.4 times smaller than He, which can slow down learning in a network this deep.
 
@@ -292,7 +293,7 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 
 ## D21. Sanity check passed: the model memorizes 10 real patches (2026-10-15, Phase 3)
 
-**Setup.** `configs/sanity_check.yaml`: the 10 patches of the 100-patch sample with the most Schroeder fire pixels (440 in total), used as both training and validation set (`data/splits/sanity_schroeder.csv`). U-Net-Light (3c), the original's settings except batch size 2 and no early stopping. Run on this machine's Apple GPU, 165 seconds. Run record: `runs/sanity_check_seed0_20261015-221154/`.
+**Setup.** `configs/sanity_check.yaml`: the 10 patches of the 100-patch sample with the most Schroeder fire pixels (440 in total), used as both training and validation set (`data/splits/sanity_schroeder.csv`). U-Net-Light (3c), the original's settings except batch size 2 and no early stopping. Run on this machine's Apple GPU, 165 seconds. Run record: `runs/sanity_check_seed0_20261015-221154/` on the machine that ran it (run folders are not in git).
 
 **Result.** Validation (= training) F1 at threshold 0.25:
 

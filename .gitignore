@@ -13,12 +13,9 @@ data/
 # Evaluation output files (JSON), kept only on the machine that made them
 results/r0/
 
-# Run artifacts: keep config.yaml and history.csv; drop weights and the large
-# TensorBoard / W&B logs (tens of MB per run with example pictures)
-runs/*/weights*
-runs/*/checkpoint*
-runs/*/events*
-runs/*/wandb/
+# Training runs (settings, per-epoch results, weights, logs) stay on the
+# machine that made them
+runs/
 
 # OS
 .DS_Store

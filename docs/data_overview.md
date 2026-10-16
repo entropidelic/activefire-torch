@@ -134,17 +134,31 @@ For each row of a split file, `FireDataset` returns an image and its mask:
 
 ## 7. Check: the authors' trained models in our pipeline (R0)
 
-The authors' published weights, loaded into our model and run through our
-data reading and metrics on the manual set, give the paper's Table 3 to the
-reported decimal, for all three models and for each algorithm on its own.
-Examples (precision / recall, in %):
+The authors' published weights (voting masks; Google Drive file
+`1__LJRdpSgPIRm8XFKzSYsCUFpfdntg8T` from their `download_weights.py`), loaded
+into our model and run through our data reading and metrics on all 9,044
+manual patches, reproduce the paper's Table 3 to its one reported decimal.
+So do the algorithms' own masks. In %, measured on the M3 Max, 2026-10-15:
 
-| | Paper | Ours |
+| Mask, model | Paper P / R / IoU / F | Ours P / R / IoU / F |
 |---|---|---|
-| U-Net-Light (3c), voting | 87.2 / 92.4 | 87.2 / 92.4 |
-| U-Net (10c), voting | 83.6 / 94.0 | 83.6 / 94.0 |
-| Schroeder alone | 88.1 / 70.2 | 88.1 / 70.2 |
+| Voting, U-Net-Light (3c) | 87.2 / 92.4 / 81.4 / 89.7 | 87.21 / 92.41 / 81.38 / 89.73 |
+| Voting, U-Net (3c) | 86.4 / 93.0 / 81.1 / 89.6 | 86.36 / 93.03 / 81.12 / 89.57 |
+| Voting, U-Net (10c) | 83.6 / 94.0 / 79.3 / 88.5 | 83.59 / 93.98 / 79.34 / 88.48 |
+| Schroeder alone | 88.1 / 70.2 / 64.1 / 78.1 | 88.10 / 70.21 / 64.13 / 78.14 |
+| Murphy alone | 76.6 / 96.1 / 74.3 / 85.2 | 76.58 / 96.09 / 74.27 / 85.23 |
+| Kumar-Roy alone | 82.3 / 68.4 / 59.7 / 74.7 | 82.29 / 68.44 / 59.65 / 74.73 |
 
-So the data reading, the model and the metrics are correct. When we train
-our own models, any gap to the paper comes from training: less data (3 of 11
-regions) and a different random split.
+Commands (the result files stay on the machine that made them):
+`uv run evaluate --keras-weights data/raw/weights/voting/voting/<model folder>/model_unet_Voting_final_weights.h5`
+(add `--base-filters 64` for U-Net, and `--bands all` for 10c), and
+`uv run evaluate --algorithm <schroeder | murphy | kumar-roy>`.
+
+**What this shows, and what it does not.** The imported models reproduce the
+reported metrics on the manual set. That checks the evaluation path: the
+model's structure, the weight conversion, how images are read and scaled,
+how manual masks are read, and the metrics. It does not check the training
+code (loss, optimizer, data loading for training); the sanity check (D21)
+and R1 exercise that. A gap between our trained models and the paper can
+come from the training data (3 of 11 regions) and split, from randomness, or
+from differences in the training code.
