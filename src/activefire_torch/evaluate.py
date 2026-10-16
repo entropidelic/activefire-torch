@@ -1,13 +1,16 @@
-"""Evaluate on the manually annotated set, as in paper Table 3: either a model
-with the authors' trained weights (R0), or one algorithm's own masks (the "—"
-rows of Table 3).
+"""Evaluate at the paper's threshold (0.25):
+- one of our trained runs, on its own test split (paper Table 2) and on the
+  manually annotated set (Table 3);
+- the authors' trained weights (R0) or one algorithm's own masks (the "—" rows
+  of Table 3), on the manually annotated set.
 
 A patch has a manual mask file only if it contains fire; every other patch,
 including the 3 fire-free scenes, is evaluated with an all-zero mask.
 
 Run from the repo root, after `uv run python -m activefire_torch.splits`:
-    uv run python -m activefire_torch.evaluate --keras-weights <file.h5> [--base-filters 64] [--bands all]
-    uv run python -m activefire_torch.evaluate --algorithm schroeder
+    uv run evaluate --run runs/<run folder>
+    uv run evaluate --keras-weights <file.h5> [--base-filters 64] [--bands all]
+    uv run evaluate --algorithm schroeder
 """
 
 import argparse
@@ -18,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -30,16 +34,16 @@ from activefire_torch.train import BATCH_SIZE
 MANUAL_SPLIT_FILE = Path("data/splits/manual.csv")
 
 
-def fire_free_scenes(rows: pd.DataFrame) -> pd.Series:
-    """True for patches whose scene has no manual fire at all."""
-    scenes_with_fire = set(rows.loc[rows["mask_manual"].notna(), "scene_id"])
+def fire_free_scenes(rows: pd.DataFrame, mask_column: str = "mask_manual") -> pd.Series:
+    """True for patches whose scene has no fire at all in mask_column."""
+    scenes_with_fire = set(rows.loc[rows[mask_column].notna(), "scene_id"])
     return ~rows["scene_id"].isin(scenes_with_fire)
 
 
 def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device, num_workers: int) -> dict:
     """Run the model over the dataset, in order, and score its probabilities.
     seconds_per_patch includes reading the files."""
-    in_fire_free_scene = torch.tensor(fire_free_scenes(dataset.rows).to_numpy())
+    in_fire_free_scene = torch.tensor(fire_free_scenes(dataset.rows, dataset.mask_column).to_numpy())
     counts = PixelCounts()
     fire_free_counts = PixelCounts()
     histogram = ScoreHistogram()
@@ -63,6 +67,42 @@ def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device,
         "average_precision": histogram.average_precision(),
         "fire_free_scenes_fp": fire_free_counts.fp,
         "seconds_per_patch": seconds / len(dataset),
+    }
+
+
+def evaluate_run(
+    run_folder: Path, device: torch.device, num_workers: int, manual_split_file: Path = MANUAL_SPLIT_FILE
+) -> dict:
+    """A trained run's final weights, on its own test split and on the manual set.
+
+    Bands, model size, scaling and band statistics come from the run's
+    config.yaml, so the model sees its inputs exactly as in training.
+    """
+    record = yaml.safe_load((run_folder / "config.yaml").read_text())
+    model = UNet(in_channels=len(record["bands"]), base_filters=record["base_filters"])
+    model.load_state_dict(torch.load(run_folder / "weights.pt", map_location="cpu"))
+
+    test_set = FireDataset(
+        split_file=record["split_file"],
+        split="test",
+        bands=record["bands"],
+        mask_source=record["mask_source"],
+        version=record["version"],
+        scaling=record["scaling"],
+        band_stats=record["band_stats"],
+    )
+    manual_set = FireDataset(
+        split_file=manual_split_file,
+        split="test",
+        bands=record["bands"],
+        mask_source="manual",
+        version="full",
+        scaling=record["scaling"],
+        band_stats=record["band_stats"],
+    )
+    return {
+        "test": evaluate_model(model, test_set, device, num_workers),
+        "manual": evaluate_model(model, manual_set, device, num_workers),
     }
 
 
@@ -94,6 +134,7 @@ def evaluate_algorithm(rows: pd.DataFrame, algorithm: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     what = parser.add_mutually_exclusive_group(required=True)
+    what.add_argument("--run", type=Path, help="run folder of one of our trained models")
     what.add_argument("--keras-weights", type=Path, help="the authors' .h5 weights file")
     what.add_argument("--algorithm", choices=["schroeder", "murphy", "kumar-roy"], help="score this algorithm's masks")
     parser.add_argument("--base-filters", type=int, default=16, help="16 for U-Net-Light, 64 for U-Net")
@@ -105,6 +146,14 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=0, help="extra processes reading files")
     parser.add_argument("--output", type=Path, help="also save the results to this JSON file")
     args = parser.parse_args()
+
+    if args.run:
+        results = evaluate_run(args.run, get_device(args.device), args.num_workers)
+        for name, scores in results.items():
+            print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
+                  f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
+        (args.run / "evaluation.json").write_text(json.dumps(results, indent=2) + "\n")
+        return
 
     rows = select_rows(args.split_file, "test", "manual", "full")
     print(f"{len(rows)} patches from {rows['scene_id'].nunique()} scenes, "

@@ -8,6 +8,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from activefire_torch import train
+from activefire_torch.evaluate import evaluate_run
 from activefire_torch.models import UNet
 from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, read_config, train_one_epoch, validate
 from helpers import write_tif
@@ -82,8 +83,8 @@ def test_config_with_a_typo_is_rejected(tmp_path):
 
 
 def write_fake_run(folder):
-    """8 patches of 32 x 32 with a 4 x 4 fire at a random place (6 train, 2 val),
-    and a config file for a 2-epoch run on the CPU."""
+    """8 patches of 32 x 32 with a 4 x 4 fire at a random place (6 train, 2 val,
+    and the same 2 again as test), and a config file for a 2-epoch run on the CPU."""
     rng = np.random.default_rng(0)
     rows = []
     for i in range(8):
@@ -94,8 +95,9 @@ def write_fake_run(folder):
         mask[:, row : row + 4, column : column + 4] = 1
         write_tif(folder / f"image{i}.tif", image)
         write_tif(folder / f"mask{i}.tif", mask)
-        rows.append({"image": str(folder / f"image{i}.tif"), "mask_voting": str(folder / f"mask{i}.tif"),
-                     "split": "train" if i < 6 else "val"})
+        rows.append({"image": str(folder / f"image{i}.tif"), "scene_id": f"scene{i}",
+                     "mask_voting": str(folder / f"mask{i}.tif"), "split": "train" if i < 6 else "val"})
+    rows += [{**row, "split": "test"} for row in rows[6:]]
     pd.DataFrame(rows).to_csv(folder / "split.csv", index=False)
 
     config = folder / "run.yaml"
@@ -151,3 +153,22 @@ def test_interrupted_run_resumes_where_it_stopped(tmp_path, monkeypatch):
     assert [row["epoch"] for row in history] == [1, 2, 3]
     assert pd.read_csv(tmp_path / "history.csv")["epoch"].tolist() == [1, 2, 3]
     assert not (tmp_path / "checkpoint.pt").exists()
+
+
+def test_evaluating_a_run_uses_its_training_inputs(tmp_path, monkeypatch):
+    # The fake run's test split is the same 2 patches as its validation split,
+    # so evaluating the final weights must give exactly the last validation
+    # counts, unless bands, scaling or weights were loaded differently.
+    config = write_fake_run(tmp_path)
+    history = run_training(config, 0, tmp_path / "runs", monkeypatch)
+    (run_folder,) = (tmp_path / "runs").iterdir()
+
+    split = pd.read_csv(tmp_path / "split.csv")
+    manual = split[split["split"] == "test"].rename(columns={"mask_voting": "mask_manual"})
+    manual.to_csv(tmp_path / "manual.csv", index=False)
+
+    results = evaluate_run(run_folder, torch.device("cpu"), num_workers=0, manual_split_file=tmp_path / "manual.csv")
+    last_epoch = history.iloc[-1]
+    for name in ["tp", "fp", "fn"]:
+        assert results["test"][name] == last_epoch[f"val_{name}"], name
+    assert results["test"]["average_precision"] == pytest.approx(last_epoch["val_average_precision"])
