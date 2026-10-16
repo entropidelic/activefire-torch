@@ -6,19 +6,6 @@ Journal of Photogrammetry and Remote Sensing; original Keras code:
 [pereira-gha/activefire](https://github.com/pereira-gha/activefire)).
 Work in progress.
 
-## Status
-
-- **Done:** data download, inspection and splits (3 of the dataset's 11
-  regions); the dataset; the U-Net, matching the original layer by layer and
-  in parameter count; metrics; evaluation; training with checkpoints and resume.
-- **R0:** the authors' trained models, converted to PyTorch, reproduce the
-  paper's Table 3 on the manually annotated set
-  ([docs/data_overview.md](docs/data_overview.md), section 7).
-- **In progress:** Stage 1, replicating the paper's training (R1: U-Net-Light
-  on voting masks).
-- **Next:** Stage 2, controlled changes one at a time (location-based splits,
-  augmentation, losses, thresholds, …).
-
 ## Setup
 
 Requires [uv](https://docs.astral.sh/uv/).
