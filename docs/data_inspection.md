@@ -42,6 +42,39 @@ Measured on the M3 Max, 2026-10-15, from `data/splits/scene.csv` and
 | South_America | 3,088 | 1,017 | 3,978 | 8,083 |
 | All | 3,928 | 1,145 | 4,980 | 10,053 |
 
+### Class imbalance
+
+Measured on the M3 Max, 2026-10-15, by reading every mask file listed in
+`data/splits/scene.csv` and `data/splits/manual.csv`. "fire_only" counts
+only patches with a mask file from that source; "full" counts all patches.
+
+| Data | Source | Mask files | Empty files | Fire px per file, median | Max | Fire share, fire_only | Fire share, full |
+|---|---|---|---|---|---|---|---|
+| Training regions | Intersection | 6,900 | 0 | 2 | 1,419 | 0.016% | 0.007% |
+| Training regions | Kumar-Roy | 16,319 | 0 | 2 | 1,981 | 0.012% | 0.012% |
+| Training regions | Murphy | 10,704 | 0 | 2 | 4,472 | 0.020% | 0.012% |
+| Training regions | Schroeder | 7,275 | 0 | 2 | 1,991 | 0.018% | 0.007% |
+| Training regions | Voting | 10,053 | 0 | 2 | 1,969 | 0.018% | 0.010% |
+| Manual set | Manual | 100 | 0 | 7 | 13,940 | 1.096% | 0.012% |
+| Manual set | Voting | 198 | 0 | 3 | 11,902 | 0.500% | 0.011% |
+| Manual set | Intersection | 118 | 0 | 4 | 9,813 | 0.577% | 0.008% |
+| Manual set | Kumar-Roy | 391 | 0 | 3 | 10,356 | 0.233% | 0.010% |
+| Manual set | Murphy | 164 | 0 | 4 | 16,433 | 0.839% | 0.015% |
+| Manual set | Schroeder | 227 | 0 | 4 | 11,450 | 0.385% | 0.010% |
+
+- No mask file is empty: a mask file exists only where its source found fire,
+  so "no file" and "no fire" mean the same thing (as assumed in D9 and D16).
+- **Fire is about 1 pixel in 5,500** in the Stage 1 training data (voting,
+  fire_only: 0.018%, about 12 fire pixels per 256 x 256 patch on average).
+  Half of all mask files have at most 2 fire pixels (2 x 30 m pixels).
+- A model that always answers "no fire" is right on 99.98% of pixels, so
+  accuracy is meaningless here. A model guessing at random gets an average
+  precision about equal to the fire share, i.e. about 0.0002.
+- The manual set's fires are larger: its 100 fire patches hold 1.1% fire
+  pixels, median 7 per patch. Over all 9,044 manual patches the share
+  (0.012%) is close to the training data's.
+- The manual set also includes voting and intersection masks.
+
 ### Manual set
 
 - 9,044 patches from 13 scenes at 13 locations. Only **100** patches have a
@@ -158,5 +191,4 @@ Measured on this machine, 2026-10-13 to 2026-10-14.
 
 ## Not yet measured
 
-- Share of fire pixels per source, and whether any mask file is all zeros.
 - The figure of 8–10 patches with every mask source.
