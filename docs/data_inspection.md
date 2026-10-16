@@ -6,7 +6,7 @@ Notebook: `notebooks/01_data_inspection.ipynb`.
 ## The three regions (Oceania + North_America2 + South_America)
 
 Measured on the M3 Max, 2026-10-15, from `data/splits/scene.csv` and
-`data/splits/manual.csv` (written by `python -m activefire_torch.splits`).
+`data/splits/manual.csv` (written by `uv run splits`).
 
 | Region | Patches | Scenes | Locations | Schroeder | Murphy | Kumar-Roy | Voting | Intersection | On disk |
 |---|---|---|---|---|---|---|---|---|---|

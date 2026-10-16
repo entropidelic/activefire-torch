@@ -7,7 +7,7 @@
 A patch has a manual mask file only if it contains fire; every other patch,
 including the 3 fire-free scenes, is evaluated with an all-zero mask.
 
-Run from the repo root, after `uv run python -m activefire_torch.splits`:
+Run from the repo root, after `uv run splits`:
     uv run evaluate --run runs/<run folder>
     uv run evaluate --keras-weights <file.h5> [--base-filters 64] [--bands all]
     uv run evaluate --algorithm schroeder

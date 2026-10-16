@@ -26,7 +26,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```
 uv sync
 scripts/download_data.sh               # or some parts: subset, manual, regions, weights
-uv run python -m activefire_torch.splits
+uv run splits
 ```
 
 Data, split files, training runs and evaluation outputs are not in git. Each

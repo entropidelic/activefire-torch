@@ -5,7 +5,7 @@ assigned at random. Split S (Stage 2) assigns whole locations (WRS path/row),
 so no test location is seen in training, on any date (D15).
 
 Run from the repo root after downloading the regions:
-    uv run python -m activefire_torch.splits
+    uv run splits
 """
 
 from pathlib import Path
@@ -157,7 +157,7 @@ def split_by_location(patches: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
     return pd.concat(results, ignore_index=True)
 
 
-if __name__ == "__main__":
+def main() -> None:
     if not DATA_FOLDER.exists():
         raise SystemExit(f"No regions in {DATA_FOLDER}; run scripts/download_data.sh regions first")
     patches = list_patches(DATA_FOLDER)
@@ -188,3 +188,7 @@ if __name__ == "__main__":
     print(f"{len(patches)} patches, {patches['pathrow'].nunique()} locations")
     print("Split S, patches per region and split:")
     print(pd.crosstab(split_s["region"], split_s["split"], margins=True))
+
+
+if __name__ == "__main__":
+    main()
