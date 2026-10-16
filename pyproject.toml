@@ -18,6 +18,7 @@ dependencies = [
     "tensorboard>=2.21.0",
     "torch>=2.14.1",
     "tqdm>=4.70.1",
+    "wandb>=0.30.0",
 ]
 
 [build-system]

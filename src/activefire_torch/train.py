@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import wandb
 import yaml
 from torch import nn
 from torch.utils.data import DataLoader
@@ -30,6 +31,8 @@ ADAM_EPS = 1e-7  # Keras Adam default (PyTorch's is 1e-8)
 MAX_EPOCHS = 50
 PATIENCE = 5  # stop after this many epochs without a lower validation loss
 RUNS_FOLDER = Path("runs")
+WANDB_PROJECT = "activefire-torch"
+EXAMPLES_EVERY = 5  # epochs between example pictures in TensorBoard (and on epoch 1)
 
 # A config file must set these; see configs/ for examples.
 REQUIRED_SETTINGS = ["split_file", "mask_source", "version", "bands"]
@@ -44,6 +47,7 @@ DEFAULT_SETTINGS = {
     "seed": 0,
     "device": "auto",
     "num_workers": 0,
+    "wandb": False,  # also send the TensorBoard log to Weights & Biases
 }
 
 
@@ -93,6 +97,18 @@ def validate(model: nn.Module, loader: DataLoader, loss_function: nn.Module, dev
     return {"loss": total_loss / patches, **counts.scores(), "average_precision": histogram.average_precision()}
 
 
+def example_picture(image: torch.Tensor, mask: torch.Tensor, probability: torch.Tensor) -> torch.Tensor:
+    """One strip of three pictures [3, H, 3W]: the image's first three bands as
+    red, green, blue, the true mask, and the predicted probability (white = fire)."""
+    # Stretch each band so its darkest 2% is black and brightest 2% white. Fire is
+    # far brighter than anything else, so it saturates instead of darkening the rest.
+    color = image[:3]
+    low = color.flatten(1).quantile(0.02, dim=1).view(-1, 1, 1)
+    high = color.flatten(1).quantile(0.98, dim=1).view(-1, 1, 1)
+    color = ((color - low) / (high - low + 1e-6)).clamp(0, 1)
+    return torch.cat([color, mask.expand(3, -1, -1), probability.expand(3, -1, -1)], dim=2)
+
+
 def fit(
     model: nn.Module,
     train_loader: DataLoader,
@@ -101,6 +117,7 @@ def fit(
     run_folder: Path,
     max_epochs: int = MAX_EPOCHS,
     patience: int = PATIENCE,
+    examples: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> list[dict[str, float]]:
     """Train as the original does: Adam and binary cross-entropy, validating
     after every epoch, and stopping once the validation loss has not improved
@@ -110,7 +127,10 @@ def fit(
     Writes to run_folder:
         history.csv   one row per epoch, rewritten every epoch
         weights.pt    the final weights (state_dict)
-        events.*      TensorBoard log (tensorboard --logdir runs)
+        events.*      TensorBoard log (tensorboard --logdir runs); with
+                      examples = (images, masks), also pictures of the
+                      model's predictions on them, on epoch 1 and every
+                      EXAMPLES_EVERY epochs
 
     Returns the rows of history.csv: epoch, seconds, train_loss, and
     val_<score> for every score from validate().
@@ -141,6 +161,12 @@ def fit(
             for name in ["precision", "recall", "f1", "iou", "average_precision"]:
                 writer.add_scalar(f"val/{name}", scores[name], epoch)
             writer.add_scalar("seconds_per_epoch", seconds, epoch)
+            if examples is not None and (epoch == 1 or epoch % EXAMPLES_EVERY == 0):
+                images, masks = examples
+                with torch.inference_mode():  # model is in eval mode after validate()
+                    probabilities = torch.sigmoid(model(images.to(device))).cpu()
+                for i in range(len(images)):
+                    writer.add_image(f"examples/{i}", example_picture(images[i], masks[i], probabilities[i]), epoch)
             print(f"epoch {epoch:2d}  train loss {train_loss:.4f}  val loss {scores['loss']:.4f}  "
                   f"val F1 {scores['f1']:.3f}  {seconds:.0f} s")
 
@@ -222,6 +248,13 @@ def main() -> None:
 
     model = UNet(in_channels=len(config["bands"]), base_filters=config["base_filters"])
 
+    # Example pictures: the 4 largest fires among the first 100 validation
+    # patches (most fires are 1-2 pixels, invisible in a picture).
+    val = datasets["val"]
+    fire_pixels = {i: int(val[i][1].sum()) for i in range(min(100, len(val)))}
+    largest = sorted(fire_pixels, key=lambda i: fire_pixels[i], reverse=True)[:4]
+    examples = (torch.stack([val[i][0] for i in largest]), torch.stack([val[i][1] for i in largest]))
+
     started = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_folder = RUNS_FOLDER / f"{args.config.stem}_seed{config['seed']}_{started}"
     run_folder.mkdir(parents=True)
@@ -239,7 +272,13 @@ def main() -> None:
     print(f"Run {run_folder}: {len(datasets['train'])} training and {len(datasets['val'])} validation patches "
           f"on {describe_device(device)}")
 
-    fit(model, train_loader, val_loader, device, run_folder, config["max_epochs"], config["patience"])
+    if config["wandb"]:
+        # Must start before fit() opens the TensorBoard log, so it can copy it.
+        wandb.init(project=WANDB_PROJECT, name=run_folder.name, config=run_record, dir=run_folder,
+                   sync_tensorboard=True)
+    fit(model, train_loader, val_loader, device, run_folder, config["max_epochs"], config["patience"], examples)
+    if config["wandb"]:
+        wandb.finish()
 
 
 if __name__ == "__main__":
