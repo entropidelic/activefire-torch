@@ -147,7 +147,7 @@ def split_by_location(patches: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
     differ. Returns a copy with a "split" column.
     """
     results = []
-    for region_name, region_patches in patches.groupby("region"):
+    for _, region_patches in patches.groupby("region"):
         locations = pd.DataFrame({"pathrow": sorted(region_patches["pathrow"].unique())})
         locations = split_by_patch(locations, seed)
         results.append(region_patches.merge(locations, on="pathrow"))
@@ -156,6 +156,8 @@ def split_by_location(patches: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
+    if not DATA_FOLDER.exists():
+        raise SystemExit(f"No regions in {DATA_FOLDER}; run scripts/download_data.sh regions first")
     patches = list_patches(DATA_FOLDER)
     SPLITS_FOLDER.mkdir(parents=True, exist_ok=True)
 
@@ -173,10 +175,13 @@ if __name__ == "__main__":
     split_s.to_csv(SPLITS_FOLDER / "scene.csv", index=False)
 
     # The manual set is only ever used for testing.
-    manual = list_patches(MANUAL_FOLDER)
-    manual["split"] = "test"
-    manual.to_csv(SPLITS_FOLDER / "manual.csv", index=False)
-    print(f"Manual set: {len(manual)} patches, {manual['mask_manual'].notna().sum()} with a manual mask")
+    if MANUAL_FOLDER.exists():
+        manual = list_patches(MANUAL_FOLDER)
+        manual["split"] = "test"
+        manual.to_csv(SPLITS_FOLDER / "manual.csv", index=False)
+        print(f"Manual set: {len(manual)} patches, {manual['mask_manual'].notna().sum()} with a manual mask")
+    else:
+        print(f"No manual set in {MANUAL_FOLDER}; manual.csv not written")
 
     print(f"{len(patches)} patches, {patches['pathrow'].nunique()} locations")
     print("Split S, patches per region and split:")

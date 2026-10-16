@@ -25,9 +25,9 @@ from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, read_mask, sele
 from activefire_torch.device import DEVICE_CHOICES, describe_device, get_device
 from activefire_torch.metrics import PixelCounts, ScoreHistogram
 from activefire_torch.models import UNet, load_keras_weights
+from activefire_torch.train import BATCH_SIZE
 
 MANUAL_SPLIT_FILE = Path("data/splits/manual.csv")
-BATCH_SIZE = 16
 
 
 def fire_free_scenes(rows: pd.DataFrame) -> pd.Series:

@@ -37,7 +37,7 @@ class Upsample(nn.Module):
 
     The transposed conv outputs 2H+1 x 2W+1; Keras keeps the first 2H x 2W.
     The usual PyTorch equivalent (padding=1, output_padding=1) keeps the last
-    ones instead, a one-pixel shift (see test_upsample_matches_tensorflow).
+    ones instead, a one-pixel shift (see test_converted_upsample_matches_keras).
     """
 
     def __init__(self, in_channels: int, out_channels: int) -> None:
