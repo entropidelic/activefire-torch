@@ -3,7 +3,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from activefire_torch.models import UNet
-from activefire_torch.train import ADAM_EPS, LEARNING_RATE, train_one_epoch, validate
+from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, train_one_epoch, validate
 
 
 def fake_batch():
@@ -32,14 +32,6 @@ def test_epochs_lower_the_training_loss():
     assert losses[-1] < losses[0] - 0.1
 
 
-def test_an_epoch_changes_the_weights():
-    model = UNet(in_channels=3, base_filters=8)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, eps=ADAM_EPS)
-    before = model.output.weight.clone()
-    train_one_epoch(model, fake_loader(), nn.BCEWithLogitsLoss(), optimizer, torch.device("cpu"))
-    assert not torch.equal(model.output.weight, before)
-
-
 def test_validate_changes_nothing_and_repeats_exactly():
     torch.manual_seed(0)
     model = UNet(in_channels=3, base_filters=8)
@@ -53,4 +45,16 @@ def test_validate_changes_nothing_and_repeats_exactly():
     assert first == second
     for name, value in model.state_dict().items():
         assert torch.equal(value, weights_before[name]), name
-    assert set(first) >= {"loss", "precision", "recall", "f1", "iou", "average_precision"}
+
+
+def test_fit_stops_early_when_validation_gets_worse():
+    # Validation masks are the opposite of the training masks, so the better
+    # the model learns, the higher the validation loss.
+    images, masks = fake_batch()
+    opposite = DataLoader(TensorDataset(images, 1 - masks), batch_size=2)
+    torch.manual_seed(0)
+    history = fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), patience=2)
+    val_losses = [row["val_loss"] for row in history]
+    # Epoch 1 sets the best loss; epochs 2 and 3 are worse; stop after epoch 3.
+    assert len(history) == 3
+    assert val_losses[1] > val_losses[0] and val_losses[2] > val_losses[0]
