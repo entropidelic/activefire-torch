@@ -265,3 +265,28 @@ These rules are written down before seeing any Stage 2 result, so they cannot be
 **Not copied.** Keras's `he_normal` is a *truncated* normal: values beyond 2 spreads are redrawn, and the spread is enlarged a little to make up for it. We use a plain normal. This only changes the rare largest starting values, and a different seed changes the starting weights far more than this does.
 
 **Why match at all.** Starting weights only affect training, not what a trained model computes, so R0 does not need this. It is copied because it is cheap, so a gap in R1 can't be blamed on it. It also matters for T7 (no BatchNorm): without BatchNorm, PyTorch's default would start about 2.4 times smaller than He, which can slow down learning in a network this deep.
+
+## D19. Keep the location split as it is (2026-10-15, Checkpoint A)
+
+**Finding.** With South America added (D17), Split S has 1,145 validation patches with voting masks (11% of 10,053): North_America2 39, Oceania 89, South_America 1,017 (`docs/data_inspection.md`).
+
+**Decision.** Keep Split S as defined in D15 (40 / 10 / 50 of locations, each region separately, seed 42). No rebalancing by patch count.
+
+**Why.** Pooled validation is large enough for early stopping and threshold tuning. The small per-region validation sets only mattered for T1b with one region as the training set, which D20 no longer uses.
+
+## D20. T1b becomes leave-one-region-out (2026-10-15, Checkpoint A; replaces the directions in D14)
+
+**Decision.** T1b trains on two regions and tests on the third region's Split S test patches, for each of the three regions. The rest of D14 is unchanged: same test patches for every model, a size-matched control, validation from the training regions only, 3 seeds.
+
+| Held out | Training (voting) | Validation | Test |
+|---|---|---|---|
+| North_America2 | 3,616 (Oceania + South_America) | 1,106 | 457 |
+| Oceania | 3,400 (North_America2 + South_America) | 1,056 | 545 |
+| South_America | 840 (North_America2 + Oceania) | 128 | 3,978 |
+
+**Why.**
+- Training on North_America2 or Oceania alone (D14) leaves 312 or 528 training patches and 39 or 89 validation patches: likely inconclusive.
+- Holding out South America answers the question most relevant to fire monitoring in Latin America: does a model trained elsewhere work there? Its training set is small (840), but the size-matched control makes the comparison fair; it is only noisier, and is reported as such.
+
+**Cost.** 18 trainings (3 directions x (T1b + control) x 3 seeds), up from 12.
+

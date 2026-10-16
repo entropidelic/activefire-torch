@@ -3,6 +3,59 @@
 Only measured numbers go here. Anything not yet measured is listed at the end.
 Notebook: `notebooks/01_data_inspection.ipynb`.
 
+## The three regions (Oceania + North_America2 + South_America)
+
+Measured on the M3 Max, 2026-10-15, from `data/splits/scene.csv` and
+`data/splits/manual.csv` (written by `python -m activefire_torch.splits`).
+
+| Region | Patches | Scenes | Locations | Schroeder | Murphy | Kumar-Roy | Voting | Intersection | On disk |
+|---|---|---|---|---|---|---|---|---|---|
+| North_America2 | 3,031 | 369 | 314 | 610 | 1,156 | 2,619 | 808 | 452 | 4.1 GB |
+| Oceania | 2,200 | 229 | 190 | 821 | 1,282 | 2,060 | 1,162 | 752 | 3.1 GB |
+| South_America | 11,875 | 354 | 302 | 5,844 | 8,266 | 11,640 | 8,083 | 5,696 | 17 GB |
+| All | 17,106 | 952 | 806 | 7,275 | 10,704 | 16,319 | 10,053 | 6,900 | 24.2 GB |
+
+- Patches per scene: 18.0 on average, from 1 to 365. South America has far
+  more fire per scene (33.5 patches per scene, against 8–10 elsewhere).
+- Every patch has a mask from at least one algorithm (17,106 of 17,106), as
+  with two regions (D16).
+- Voting masks cover 68% of South America's patches, against 27%
+  (North_America2) and 53% (Oceania).
+- No location (path/row) appears in more than one region, so splitting each
+  region separately cannot put one location in two splits.
+
+### Split S (by location), all patches
+
+| Region | Train | Val | Test | Total |
+|---|---|---|---|---|
+| North_America2 | 1,197 | 228 | 1,606 | 3,031 |
+| Oceania | 1,037 | 127 | 1,036 | 2,200 |
+| South_America | 4,457 | 1,331 | 6,087 | 11,875 |
+| All | 6,691 (39%) | 1,686 (10%) | 8,729 (51%) | 17,106 |
+
+### Split S, patches with a voting mask
+
+| Region | Train | Val | Test | Total |
+|---|---|---|---|---|
+| North_America2 | 312 | 39 | 457 | 808 |
+| Oceania | 528 | 89 | 545 | 1,162 |
+| South_America | 3,088 | 1,017 | 3,978 | 8,083 |
+| All | 3,928 | 1,145 | 4,980 | 10,053 |
+
+### Manual set
+
+- 9,044 patches from 13 scenes at 13 locations. Only **100** patches have a
+  manual mask (a mask file exists only where there is fire); 2,091 patches
+  are in the 3 fire-free scenes.
+- **Overlap with the training regions:** 2 of the 13 locations.
+  - `003006` (northern Greenland, probably the fire-free Greenland scene):
+    35 patches in North_America2.
+  - `105069`: 9 patches in Oceania.
+- Both locations fall in Split S **test**, so no Stage 2 model trains on
+  them. Split P (Stage 1) assigns patches at random, so some of these 44
+  patches end up in Stage 1 training, as they would have in the original;
+  this is reported next to the comparison with the paper.
+
 ## The two regions (Oceania + North_America2)
 
 Measured with the notebook on the M3 Max, 2026-10-15.
@@ -61,6 +114,8 @@ often there.
 
 ### Open question for Checkpoint A: the small validation set
 
+**Resolved:** South_America was added (option 3, D17); the split is kept as is (D19) and T1b changed to leave-one-region-out (D20). The text below is the question as it stood with two regions.
+
 With voting masks, Split S leaves 128 validation patches in total, and only
 39 for North_America2. That matters most for T1b: training on North America
 alone means 312 training patches and choosing the stopping point and
@@ -103,8 +158,5 @@ Measured on this machine, 2026-10-13 to 2026-10-14.
 
 ## Not yet measured
 
-- Disk size.
 - Share of fire pixels per source, and whether any mask file is all zeros.
-- Overlap by WRS path/row between the manual set and the training regions
-  (the manual set is not downloaded yet).
 - The figure of 8–10 patches with every mask source.
