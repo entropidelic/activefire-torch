@@ -33,15 +33,13 @@ uv run tensorboard --logdir runs
 uv run pytest
 ```
 
-## Where things are
+## Relevant locations
 
 | Path | What |
 |---|---|
-| `src/activefire_torch/` | `splits.py`, `dataset.py`, `models.py`, `metrics.py`, `train.py`, `evaluate.py`, `device.py` |
-| `configs/` | one YAML file per kind of run |
-| `docs/data_overview.md` | how the data is handled, in short |
-| `docs/data_inspection.md` | measurements of the data |
-| `docs/paper_notes.md` | facts from the paper and the original code |
-| `docs/DECISIONS.md` | every choice, with its reasons (D1, D2, …) |
-| `notebooks/01_data_inspection.ipynb` | a first look at the data |
-| `runs/<run>/` | each run's settings (`config.yaml`), per-epoch results (`history.csv`), weights and logs; not in git |
+| `configs/` | one YAML file per kind of training run |
+| `data/raw/` | downloaded images, masks and the authors' weights |
+| `data/splits/` | split files written by `uv run splits` |
+| `runs/<run>/` | one folder per training run: settings (`config.yaml`), per-epoch results (`history.csv`), final weights (`weights.pt`), checkpoint while training, TensorBoard logs, and `evaluation.json` after `uv run evaluate --run` |
+| `results/figures/` | figures |
+| `results/r0/` | evaluation outputs of the authors' models |
