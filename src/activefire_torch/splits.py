@@ -34,7 +34,7 @@ MASK_SOURCE_BY_TAG = {
 }
 
 
-def read_file_name(file_name: str | Path) -> dict | None:
+def parse_file_name(file_name: str | Path) -> dict | None:
     """Parse an image or mask file name; None if it is not a dataset file.
 
         LC08_L1TP_124046_20200810_20200810_01_RT_Schroeder_p00367.tif
@@ -85,7 +85,7 @@ def list_patches(data_folder: Path) -> pd.DataFrame:
     skipped = []
 
     for file in sorted(Path(data_folder).rglob("*.tif")):
-        name = read_file_name(file)
+        name = parse_file_name(file)
         if name is None:
             skipped.append(file)
             continue

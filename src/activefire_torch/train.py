@@ -63,7 +63,7 @@ def train_one_epoch(
     Returns the average loss per patch."""
     model.train()  # dropout on; BatchNorm uses and learns from each batch
     total_loss = 0.0
-    patches = 0
+    patch_count = 0
     for images, masks in loader:
         images, masks = images.to(device), masks.to(device)
         logits = model(images)
@@ -74,8 +74,8 @@ def train_one_epoch(
         optimizer.step()
 
         total_loss += loss.item() * len(images)
-        patches += len(images)
-    return total_loss / patches
+        patch_count += len(images)
+    return total_loss / patch_count
 
 
 def validate(model: nn.Module, loader: DataLoader, loss_function: nn.Module, device: torch.device) -> dict[str, float]:
@@ -84,18 +84,18 @@ def validate(model: nn.Module, loader: DataLoader, loss_function: nn.Module, dev
     counts = PixelCounts()
     histogram = ScoreHistogram()
     total_loss = 0.0
-    patches = 0
-    with torch.inference_mode():  # no gradients needed
+    patch_count = 0
+    with torch.inference_mode():
         for images, masks in loader:
             images, masks = images.to(device), masks.to(device)
             logits = model(images)
             total_loss += loss_function(logits, masks).item() * len(images)
-            patches += len(images)
+            patch_count += len(images)
 
             probabilities = torch.sigmoid(logits)
             counts.add(probabilities, masks)
             histogram.add(logits, masks)
-    return {"loss": total_loss / patches, **counts.scores(), "average_precision": histogram.average_precision()}
+    return {"loss": total_loss / patch_count, **counts.scores(), "average_precision": histogram.average_precision()}
 
 
 def example_picture(
@@ -232,7 +232,13 @@ def read_config(path: Path) -> dict:
     unknown = [name for name in config if name not in REQUIRED_SETTINGS and name not in DEFAULT_SETTINGS]
     if missing or unknown:
         raise ValueError(f"{path}: missing settings {missing}, unknown settings {unknown}")
-    return DEFAULT_SETTINGS | config
+    config = DEFAULT_SETTINGS | config
+    if not config["bands"]:
+        raise ValueError(f"{path}: bands is empty")
+    for name in ["batch_size", "max_epochs", "patience"]:
+        if config[name] < 1:
+            raise ValueError(f"{path}: {name} must be at least 1")
+    return config
 
 
 def git_commit() -> str:
@@ -295,6 +301,8 @@ def main() -> None:
     if len(datasets["train"]) < config["batch_size"]:
         # The last partial batch is skipped, so there would be no batch at all.
         raise SystemExit(f"{len(datasets['train'])} training patches is less than one batch of {config['batch_size']}")
+    if len(datasets["val"]) == 0:
+        raise SystemExit(f"{config['split_file']} has no validation patches for this mask source and version")
     workers = config["num_workers"]
     # Training: reshuffled every epoch, and the last partial batch is skipped,
     # as in the original (steps_per_epoch = patches // batch size).

@@ -1,13 +1,13 @@
 import pandas as pd
 import pytest
 
-from activefire_torch.splits import list_patches, read_file_name, split_by_location, split_by_patch
+from activefire_torch.splits import list_patches, parse_file_name, split_by_location, split_by_patch
 
 SCENE = "LC08_L1TP_124046_20200810_20200810_01_RT"
 
 
 def test_read_image_file_name():
-    assert read_file_name(f"{SCENE}_p00367.tif") == {
+    assert parse_file_name(f"{SCENE}_p00367.tif") == {
         "scene_id": SCENE,
         "pathrow": "124046",
         "patch": 367,
@@ -17,7 +17,7 @@ def test_read_image_file_name():
 
 @pytest.mark.parametrize("tag", ["Schroeder", "Murphy", "Kumar-Roy", "GOLI_v2", "v1", "Voting", "intersection"])
 def test_read_mask_file_name(tag):
-    name = read_file_name(f"/some/folder/{SCENE}_{tag}_p00367.tif")
+    name = parse_file_name(f"/some/folder/{SCENE}_{tag}_p00367.tif")
     assert name is not None
     assert name["scene_id"] == SCENE
     assert name["patch"] == 367
@@ -26,7 +26,7 @@ def test_read_mask_file_name(tag):
 
 @pytest.mark.parametrize("bad", ["notes.tif", f"{SCENE}.tif", f"{SCENE}_p00367.png", f"{SCENE}_pXYZ.tif"])
 def test_wrong_file_name_gives_none(bad):
-    assert read_file_name(bad) is None
+    assert parse_file_name(bad) is None
 
 
 def test_list_patches_matches_masks_to_images(tmp_path):

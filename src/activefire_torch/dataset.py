@@ -129,6 +129,9 @@ class FireDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             # Shape [bands, 1, 1] to broadcast over [bands, height, width].
             self.mean = np.array([band_stats[band]["mean"] for band in bands], dtype=np.float32).reshape(-1, 1, 1)
             self.std = np.array([band_stats[band]["std"] for band in bands], dtype=np.float32).reshape(-1, 1, 1)
+            # A band with the same value everywhere has std 0, and dividing by it gives nan.
+            if not (np.isfinite(self.mean).all() and np.isfinite(self.std).all() and (self.std > 0).all()):
+                raise ValueError(f"band_stats must be finite with std > 0; got {band_stats}")
 
     def __len__(self) -> int:
         return len(self.rows)

@@ -76,10 +76,17 @@ def test_fit_stops_early_and_saves_the_last_epoch(tmp_path):
     assert pd.read_csv(tmp_path / "history.csv")["epoch"].tolist() == [1, 2, 3]
 
 
-def test_config_with_a_typo_is_rejected(tmp_path):
+@pytest.mark.parametrize(
+    "extra, problem",
+    [("pateince: 10", "pateince"), ("max_epochs: 0", "max_epochs"), ("bands: []", "bands is empty")],
+)
+def test_bad_config_is_rejected(tmp_path, extra, problem):
     config = tmp_path / "run.yaml"
-    config.write_text("split_file: x.csv\nmask_source: voting\nversion: fire_only\nbands: [B7]\npateince: 10\n")
-    with pytest.raises(ValueError, match="pateince"):
+    settings = "split_file: x.csv\nmask_source: voting\nversion: fire_only\n"
+    if not extra.startswith("bands"):
+        settings += "bands: [B7]\n"
+    config.write_text(settings + extra + "\n")
+    with pytest.raises(ValueError, match=problem):
         read_config(config)
 
 

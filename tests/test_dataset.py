@@ -75,6 +75,10 @@ def test_band_stats_use_the_same_patches_as_training(tmp_path):
     stats = compute_band_stats(split_file, ["B7"], "schroeder", "fire_only")
     assert stats["B7"]["mean"] == pytest.approx(100)
 
+    # One constant patch: std 0. Standardizing would divide by 0 and give nan.
+    with pytest.raises(ValueError, match="std > 0"):
+        FireDataset(split_file, "train", ["B7"], "schroeder", "fire_only", scaling="standardize", band_stats=stats)
+
 
 def write_one_fire_patch(folder):
     """One 4 x 4 training patch, bright and on fire only at (0, 1). Each of the
