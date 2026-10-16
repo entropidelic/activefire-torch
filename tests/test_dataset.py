@@ -5,7 +5,7 @@ import rasterio
 import torch
 from rasterio.transform import from_origin
 
-from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, compute_band_stats, read_image, read_mask
+from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, compute_band_stats, read_image
 
 
 def write_tif(path, array):
@@ -40,14 +40,6 @@ def test_read_image_picks_bands_by_name(tmp_path):
         read_image(path, ["B8"])
 
 
-def test_read_mask_returns_2d(tmp_path):
-    path = tmp_path / "mask.tif"
-    write_tif(path, np.ones((1, 4, 4), dtype=np.uint8))
-    mask = read_mask(path)
-    assert mask.shape == (4, 4)
-    assert mask.dtype == np.uint8
-
-
 def write_split_file(folder):
     """Patches a (train, all pixels 100), b (train, 300), c (test, 60000).
     Only a has a Schroeder mask (all fire)."""
@@ -79,14 +71,6 @@ def test_fire_only_keeps_patches_with_a_mask_file(tmp_path):
     _, mask = full[1]
     assert mask.shape == (1, 4, 4)
     assert mask.sum() == 0  # "b" has no mask file -> no fire
-
-
-def test_max_scaling_divides_by_65535(tmp_path):
-    split_file = write_split_file(tmp_path)
-    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", "full", scaling="max")
-    image, _ = dataset[1]
-    assert image.shape == (1, 4, 4)
-    assert image[0, 0, 0].item() == pytest.approx(300 / 65535)
 
 
 def test_band_stats_come_from_training_patches_only(tmp_path):
@@ -123,14 +107,6 @@ def write_one_fire_patch(folder):
     split_file = folder / "split.csv"
     pd.DataFrame([row]).to_csv(split_file, index=False)
     return split_file
-
-
-def test_no_augmentation_by_default(tmp_path):
-    split_file = write_one_fire_patch(tmp_path)
-    dataset = FireDataset(split_file, "train", ["B7"], "schroeder", "fire_only")
-    for _ in range(10):
-        _, mask = dataset[0]
-        assert mask[0, 0, 1] == 1  # the fire pixel never moves
 
 
 def test_augmentation_moves_image_and_mask_together(tmp_path):

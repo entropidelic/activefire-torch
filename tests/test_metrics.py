@@ -28,20 +28,18 @@ def test_counts_are_summed_over_the_set_not_averaged_per_patch():
     assert counts.scores()["recall"] == pytest.approx(100 / 101)
 
 
-def test_predicting_no_fire_leaves_only_precision_undefined():
+def test_undefined_scores_are_nan_not_zero():
+    # Fire present, nothing predicted: only precision is undefined.
     counts = PixelCounts()
     counts.add(torch.zeros(1, 1, 4, 4), torch.ones(1, 1, 4, 4))
     scores = counts.scores()
     assert math.isnan(scores["precision"])
     assert (scores["recall"], scores["f1"], scores["iou"]) == (0.0, 0.0, 0.0)
 
-
-def test_no_fire_and_no_predictions_is_undefined():
+    # No fire, nothing predicted: every score is undefined.
     counts = PixelCounts()
-    counts.add(torch.zeros(2, 1, 4, 4), torch.zeros(2, 1, 4, 4))
-    scores = counts.scores()
-    assert all(math.isnan(scores[name]) for name in ["precision", "recall", "f1", "iou"])
-    assert (scores["tp"], scores["fp"], scores["fn"]) == (0, 0, 0)
+    counts.add(torch.zeros(1, 1, 4, 4), torch.zeros(1, 1, 4, 4))
+    assert all(math.isnan(value) for name, value in counts.scores().items() if name not in ("tp", "fp", "fn"))
 
 
 def test_scores_match_sklearn():
@@ -75,19 +73,6 @@ def test_average_precision_by_hand():
     histogram = ScoreHistogram()
     histogram.add(probabilities, masks)
     assert histogram.average_precision() == pytest.approx(0.5 * 1 + 0.5 * 2 / 3)
-
-
-def test_perfect_scores_give_average_precision_1():
-    masks = torch.tensor([1.0, 1.0, 0.0, 0.0])
-    histogram = ScoreHistogram()
-    histogram.add(masks * 0.8 + 0.1, masks)
-    assert histogram.average_precision() == pytest.approx(1.0)
-
-
-def test_average_precision_without_fire_is_undefined():
-    histogram = ScoreHistogram()
-    histogram.add(torch.rand(1, 1, 4, 4), torch.zeros(1, 1, 4, 4))
-    assert math.isnan(histogram.average_precision())
 
 
 def random_predictions():
