@@ -1,3 +1,4 @@
+import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -47,14 +48,21 @@ def test_validate_changes_nothing_and_repeats_exactly():
         assert torch.equal(value, weights_before[name]), name
 
 
-def test_fit_stops_early_when_validation_gets_worse():
+def test_fit_stops_early_and_saves_the_last_epoch(tmp_path):
     # Validation masks are the opposite of the training masks, so the better
     # the model learns, the higher the validation loss.
     images, masks = fake_batch()
     opposite = DataLoader(TensorDataset(images, 1 - masks), batch_size=2)
     torch.manual_seed(0)
-    history = fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), patience=2)
+    model = UNet(in_channels=3, base_filters=8)
+    history = fit(model, fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
     val_losses = [row["val_loss"] for row in history]
     # Epoch 1 sets the best loss; epochs 2 and 3 are worse; stop after epoch 3.
     assert len(history) == 3
     assert val_losses[1] > val_losses[0] and val_losses[2] > val_losses[0]
+
+    # The saved weights are the last epoch's, as in the original.
+    saved = torch.load(tmp_path / "weights.pt")
+    for name, value in model.state_dict().items():
+        assert torch.equal(saved[name], value), name
+    assert pd.read_csv(tmp_path / "history.csv")["epoch"].tolist() == [1, 2, 3]

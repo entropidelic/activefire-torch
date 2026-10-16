@@ -1,8 +1,13 @@
 """Training. Defaults copy the original train.py (docs/paper_notes.md §7)."""
 
+import time
+from pathlib import Path
+
+import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from activefire_torch.metrics import PixelCounts, ScoreHistogram
 
@@ -64,6 +69,7 @@ def fit(
     train_loader: DataLoader,
     val_loader: DataLoader,
     device: torch.device,
+    run_folder: Path,
     max_epochs: int = MAX_EPOCHS,
     patience: int = PATIENCE,
 ) -> list[dict[str, float]]:
@@ -72,9 +78,15 @@ def fit(
     for `patience` epochs in a row (Keras EarlyStopping). As in the original,
     the model keeps the weights of the last epoch, not of the best one.
 
-    Returns one row per epoch: epoch, train_loss, and val_<score> for every
-    score from validate().
+    Writes to run_folder:
+        history.csv   one row per epoch, rewritten every epoch
+        weights.pt    the final weights (state_dict)
+        events.*      TensorBoard log (tensorboard --logdir runs)
+
+    Returns the rows of history.csv: epoch, seconds, train_loss, and
+    val_<score> for every score from validate().
     """
+    run_folder.mkdir(parents=True, exist_ok=True)
     model.to(device)
     loss_function = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, eps=ADAM_EPS)
@@ -82,18 +94,35 @@ def fit(
     history = []
     best_val_loss = float("inf")
     epochs_without_improvement = 0
-    for epoch in range(1, max_epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, loss_function, optimizer, device)
-        scores = validate(model, val_loader, loss_function, device)
-        history.append({"epoch": epoch, "train_loss": train_loss, **{f"val_{name}": value for name, value in scores.items()}})
-        print(f"epoch {epoch:2d}  train loss {train_loss:.4f}  val loss {scores['loss']:.4f}  val F1 {scores['f1']:.3f}")
+    # `with` closes the TensorBoard log even if training crashes, so the
+    # epochs done so far are kept.
+    with SummaryWriter(run_folder) as writer:
+        for epoch in range(1, max_epochs + 1):
+            start = time.perf_counter()
+            train_loss = train_one_epoch(model, train_loader, loss_function, optimizer, device)
+            scores = validate(model, val_loader, loss_function, device)
+            seconds = time.perf_counter() - start
 
-        if scores["loss"] < best_val_loss:
-            best_val_loss = scores["loss"]
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= patience:
-                print(f"Stopping: no lower validation loss in the last {patience} epochs")
-                break
+            row = {"epoch": epoch, "seconds": seconds, "train_loss": train_loss}
+            row.update({f"val_{name}": value for name, value in scores.items()})
+            history.append(row)
+            pd.DataFrame(history).to_csv(run_folder / "history.csv", index=False)
+            writer.add_scalar("loss/train", train_loss, epoch)
+            writer.add_scalar("loss/val", scores["loss"], epoch)
+            for name in ["precision", "recall", "f1", "iou", "average_precision"]:
+                writer.add_scalar(f"val/{name}", scores[name], epoch)
+            writer.add_scalar("seconds_per_epoch", seconds, epoch)
+            print(f"epoch {epoch:2d}  train loss {train_loss:.4f}  val loss {scores['loss']:.4f}  "
+                  f"val F1 {scores['f1']:.3f}  {seconds:.0f} s")
+
+            if scores["loss"] < best_val_loss:
+                best_val_loss = scores["loss"]
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= patience:
+                    print(f"Stopping: no lower validation loss in the last {patience} epochs")
+                    break
+
+    torch.save(model.state_dict(), run_folder / "weights.pt")
     return history
