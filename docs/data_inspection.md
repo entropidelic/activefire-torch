@@ -189,6 +189,22 @@ Measured on this machine, 2026-10-13 to 2026-10-14.
 - Raw values (B7, B6, B2): averages about 10,000–13,000, spreads about
   4,000–5,000, and some pixels at the maximum, 65,535.
 
-## Not yet measured
+## Figure: patches and their masks
 
-- The figure of 8–10 patches with every mask source.
+`results/figures/patches_and_masks.png`, made by section 10 of the notebook
+on the 100-patch sample (2026-10-15): 8 patches with masks from all three
+algorithms, from the smallest fire to the largest, each zoomed to 64 x 64
+pixels around the fire, in false color (B7, B6, B2) with each algorithm's
+fire pixels in cyan.
+
+- The masks sit on the bright orange and yellow spots, which confirms the
+  band order by eye (as R0 does by numbers).
+- The algorithms disagree mostly at the edges of a fire: on the largest fire,
+  Schroeder marks 115 pixels, Murphy 157 and Kumar-Roy 156.
+- In the three smallest cases (1–3 pixels) all three algorithms mark pixels
+  with no visible hot spot: a lakeshore, a coastline and a pale, possibly
+  cloudy area. They may be real fires too small to see after the contrast
+  stretch, but they fit the manual-set finding that algorithm masks contain
+  false alarms. Training labels are therefore noisy, most of all for 1–2
+  pixel fires, which are half of all mask files. Keep this in mind in the
+  error analysis.
