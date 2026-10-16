@@ -118,7 +118,9 @@ def list_patches(data_folder: Path) -> pd.DataFrame:
         source_masks = masks[masks["source"] == source]
         source_masks = source_masks[["scene_id", "patch", "file"]]
         source_masks = source_masks.rename(columns={"file": f"mask_{source}"})
-        table = table.merge(source_masks, on=["scene_id", "patch"], how="left")
+        # one_to_one: raises if an image or a mask appears twice, instead of
+        # silently duplicating rows (copies could then land in different splits).
+        table = table.merge(source_masks, on=["scene_id", "patch"], how="left", validate="one_to_one")
 
     return table
 

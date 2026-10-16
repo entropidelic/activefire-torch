@@ -49,6 +49,17 @@ def test_list_patches_matches_masks_to_images(tmp_path):
     assert pd.isna(patches.loc[2, "mask_schroeder"])
 
 
+def test_list_patches_refuses_duplicate_patches(tmp_path):
+    # The same image in two folders would otherwise become two rows, which
+    # a random split could put in train and test.
+    for region in ["Oceania", "Oceania_copy"]:
+        (tmp_path / region).mkdir()
+        (tmp_path / region / f"{SCENE}_p00001.tif").touch()
+        (tmp_path / region / f"{SCENE}_Schroeder_p00001.tif").touch()
+    with pytest.raises(pd.errors.MergeError):
+        list_patches(tmp_path)
+
+
 def fake_patches():
     """Two regions with 10 locations each and 5 patches per location."""
     rows = []

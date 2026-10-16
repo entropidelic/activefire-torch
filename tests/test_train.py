@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+import yaml
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -172,3 +173,23 @@ def test_evaluating_a_run_uses_its_training_inputs(tmp_path, monkeypatch):
     for name in ["tp", "fp", "fn"]:
         assert results["test"][name] == last_epoch[f"val_{name}"], name
     assert results["test"]["average_precision"] == pytest.approx(last_epoch["val_average_precision"])
+
+
+def test_resume_refuses_a_changed_split_and_keeps_the_device_setting(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    run_training(config, 0, tmp_path / "runs", monkeypatch)
+    (run_folder,) = (tmp_path / "runs").iterdir()
+    record = yaml.safe_load((run_folder / "config.yaml").read_text())
+    # "device" must stay a valid setting (e.g. not "cuda (NVIDIA ...)"), so resume can use it.
+    assert record["device"] == "cpu"
+
+    # Recreate the split file with one patch moved from train to val.
+    split = pd.read_csv(tmp_path / "split.csv")
+    split.loc[0, "split"] = "val"
+    split.to_csv(tmp_path / "split.csv", index=False)
+
+    monkeypatch.setattr(sys, "argv", ["train", "--resume", str(run_folder)])
+    with pytest.raises(SystemExit, match="has changed"):
+        train.main()
+    with pytest.raises(ValueError, match="has changed"):
+        evaluate_run(run_folder, torch.device("cpu"), num_workers=0)

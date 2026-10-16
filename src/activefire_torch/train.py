@@ -6,7 +6,6 @@ Run from the repo root:
 """
 
 import argparse
-import hashlib
 import random
 import subprocess
 import time
@@ -22,7 +21,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from activefire_torch.dataset import FireDataset, compute_band_stats
+from activefire_torch.dataset import FireDataset, compute_band_stats, split_fingerprint
 from activefire_torch.device import describe_device, get_device
 from activefire_torch.metrics import PixelCounts, ScoreHistogram
 from activefire_torch.models import UNet
@@ -99,12 +98,14 @@ def validate(model: nn.Module, loader: DataLoader, loss_function: nn.Module, dev
     return {"loss": total_loss / patches, **counts.scores(), "average_precision": histogram.average_precision()}
 
 
-def example_picture(image: torch.Tensor, mask: torch.Tensor, probability: torch.Tensor) -> torch.Tensor:
-    """One strip of three pictures [3, H, 3W]: the image's first three bands as
+def example_picture(
+    image: torch.Tensor, mask: torch.Tensor, probability: torch.Tensor, display_channels: list[int]
+) -> torch.Tensor:
+    """One strip of three pictures [3, H, 3W]: the image's display_channels as
     red, green, blue, the true mask, and the predicted probability (white = fire)."""
     # Stretch each band so its darkest 2% is black and brightest 2% white. Fire is
     # far brighter than anything else, so it saturates instead of darkening the rest.
-    color = image[:3]
+    color = image[display_channels]
     low = color.flatten(1).quantile(0.02, dim=1).view(-1, 1, 1)
     high = color.flatten(1).quantile(0.98, dim=1).view(-1, 1, 1)
     color = ((color - low) / (high - low + 1e-6)).clamp(0, 1)
@@ -119,7 +120,7 @@ def fit(
     run_folder: Path,
     max_epochs: int = MAX_EPOCHS,
     patience: int = PATIENCE,
-    examples: tuple[torch.Tensor, torch.Tensor] | None = None,
+    examples: tuple[torch.Tensor, torch.Tensor, list[int]] | None = None,
 ) -> list[dict]:
     """Train as the original does: Adam and binary cross-entropy, validating
     after every epoch, and stopping once the validation loss has not improved
@@ -133,9 +134,9 @@ def fit(
                       from it. Deleted when the run finishes.
         weights.pt    the final weights (state_dict)
         events.*      TensorBoard log (tensorboard --logdir runs); with
-                      examples = (images, masks), also pictures of the
-                      model's predictions on them, on epoch 1 and every
-                      EXAMPLES_EVERY epochs
+                      examples = (images, masks, display_channels), also
+                      pictures of the model's predictions on them, on epoch 1
+                      and every EXAMPLES_EVERY epochs
 
     Returns the rows of history.csv: epoch, seconds, train_loss, and
     val_<score> for every score from validate().
@@ -186,11 +187,12 @@ def fit(
                 writer.add_scalar(f"val/{name}", scores[name], epoch)
             writer.add_scalar("seconds_per_epoch", seconds, epoch)
             if examples is not None and (epoch == 1 or epoch % EXAMPLES_EVERY == 0):
-                images, masks = examples
+                images, masks, display_channels = examples
                 with torch.inference_mode():  # model is in eval mode after validate()
                     probabilities = torch.sigmoid(model(images.to(device))).cpu()
                 for i in range(len(images)):
-                    writer.add_image(f"examples/{i}", example_picture(images[i], masks[i], probabilities[i]), epoch)
+                    picture = example_picture(images[i], masks[i], probabilities[i], display_channels)
+                    writer.add_image(f"examples/{i}", picture, epoch)
             print(f"epoch {epoch:2d}  train loss {train_loss:.4f}  val loss {scores['loss']:.4f}  "
                   f"val F1 {scores['f1']:.3f}  {seconds:.0f} s")
 
@@ -214,7 +216,10 @@ def fit(
                 print(f"Stopping: no lower validation loss in the last {patience} epochs")
                 break
 
-    torch.save(model.state_dict(), run_folder / "weights.pt")
+    # Temporary file, then rename: an interrupted save cannot leave a partial
+    # weights.pt, which would mark the run as finished.
+    torch.save(model.state_dict(), run_folder / "weights.tmp")
+    (run_folder / "weights.tmp").replace(run_folder / "weights.pt")
     checkpoint_file.unlink()
     return history
 
@@ -251,6 +256,8 @@ def main() -> None:
         # The settings the run started with, saved in its folder.
         run_record = yaml.safe_load((run_folder / "config.yaml").read_text())
         config = {name: run_record[name] for name in REQUIRED_SETTINGS + list(DEFAULT_SETTINGS)}
+        if split_fingerprint(config["split_file"]) != run_record["split_file_sha256"]:
+            raise SystemExit(f"{config['split_file']} has changed since this run started; it cannot be resumed")
     else:
         config = read_config(args.config)
         if args.seed is not None:
@@ -268,7 +275,9 @@ def main() -> None:
 
     device = get_device(config["device"])
     band_stats = None
-    if config["scaling"] == "standardize":
+    if args.resume:
+        band_stats = run_record["band_stats"]
+    elif config["scaling"] == "standardize":
         band_stats = compute_band_stats(config["split_file"], config["bands"], config["mask_source"], config["version"])
 
     datasets = {}
@@ -304,14 +313,20 @@ def main() -> None:
     val = datasets["val"]
     fire_pixels = {i: int(val[i][1].sum()) for i in range(min(100, len(val)))}
     largest = sorted(fire_pixels, key=lambda i: fire_pixels[i], reverse=True)[:4]
-    examples = (torch.stack([val[i][0] for i in largest]), torch.stack([val[i][1] for i in largest]))
+    chosen = [val[i] for i in largest]  # (image, mask) pairs
+    # Shown as B7, B6, B2 (the paper's false color), or the first band in gray
+    # if those three are not all used.
+    bands = config["bands"]
+    display_channels = [0, 0, 0]
+    if {"B7", "B6", "B2"} <= set(bands):
+        display_channels = [bands.index(band) for band in ["B7", "B6", "B2"]]
+    examples = (torch.stack([image for image, _ in chosen]), torch.stack([mask for _, mask in chosen]), display_channels)
 
     if not args.resume:
         run_record.update({
             "code_version": git_commit(),
-            # The split files are not in git; this identifies the exact split.
-            "split_file_sha256": hashlib.sha256(Path(config["split_file"]).read_bytes()).hexdigest()[:16],
-            "device": describe_device(device),
+            "split_file_sha256": split_fingerprint(config["split_file"]),
+            "device_used": describe_device(device),  # "device" stays the setting, for resuming
             "train_patches": len(datasets["train"]),
             "val_patches": len(datasets["val"]),
             "band_stats": band_stats,

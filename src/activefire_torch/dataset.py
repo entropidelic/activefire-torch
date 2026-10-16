@@ -1,5 +1,6 @@
 """PyTorch dataset of (image, fire mask) patches."""
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,12 @@ def read_mask(path: str | Path) -> np.ndarray:
     """Mask as [height, width], 1 = fire."""
     with rasterio.open(path) as src:
         return src.read(1)
+
+
+def split_fingerprint(split_file: str | Path) -> str:
+    """A short hash of a split file's contents. Split files are not in git, so
+    runs record this to detect a split that was recreated differently."""
+    return hashlib.sha256(Path(split_file).read_bytes()).hexdigest()[:16]
 
 
 def select_rows(split_file: str | Path, split: str, mask_source: str, version: str) -> pd.DataFrame:

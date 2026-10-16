@@ -25,13 +25,13 @@ import yaml
 from torch import nn
 from torch.utils.data import DataLoader
 
-from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, read_mask, select_rows
+from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, read_mask, select_rows, split_fingerprint
 from activefire_torch.device import DEVICE_CHOICES, describe_device, get_device
 from activefire_torch.metrics import PixelCounts, ScoreHistogram
 from activefire_torch.models import UNet, load_keras_weights
-from activefire_torch.train import BATCH_SIZE
 
 MANUAL_SPLIT_FILE = Path("data/splits/manual.csv")
+BATCH_SIZE = 16  # any size gives the same results; 16 as in training
 
 
 def fire_free_scenes(rows: pd.DataFrame, mask_column: str = "mask_manual") -> pd.Series:
@@ -80,6 +80,8 @@ def evaluate_run(
     config.yaml, so the model sees its inputs exactly as in training.
     """
     record = yaml.safe_load((run_folder / "config.yaml").read_text())
+    if split_fingerprint(record["split_file"]) != record["split_file_sha256"]:
+        raise ValueError(f"{record['split_file']} has changed since {run_folder} was trained")
     model = UNet(in_channels=len(record["bands"]), base_filters=record["base_filters"])
     model.load_state_dict(torch.load(run_folder / "weights.pt", map_location="cpu"))
 
@@ -104,6 +106,8 @@ def evaluate_run(
     return {
         "test": evaluate_model(model, test_set, device, num_workers),
         "manual": evaluate_model(model, manual_set, device, num_workers),
+        "test_split_sha256": record["split_file_sha256"],
+        "manual_split_sha256": split_fingerprint(manual_split_file),
     }
 
 
@@ -138,44 +142,50 @@ def main() -> None:
     what.add_argument("--run", type=Path, help="run folder of one of our trained models")
     what.add_argument("--keras-weights", type=Path, help="the authors' .h5 weights file")
     what.add_argument("--algorithm", choices=["schroeder", "murphy", "kumar-roy"], help="score this algorithm's masks")
-    parser.add_argument("--base-filters", type=int, default=16, help="16 for U-Net-Light, 64 for U-Net")
-    parser.add_argument("--bands", nargs="+", default=["B7", "B6", "B2"], help='band names, or "all" for the 10 bands')
-    parser.add_argument("--split-file", type=Path, default=MANUAL_SPLIT_FILE)
+    parser.add_argument("--base-filters", type=int, help="with --keras-weights: 16 (default) for U-Net-Light, 64 for U-Net")
+    parser.add_argument("--bands", nargs="+", help='with --keras-weights: band names (default B7 B6 B2), or "all"')
+    parser.add_argument("--split-file", type=Path, default=MANUAL_SPLIT_FILE, help="the manual set's split file")
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     # Worker processes each start by importing torch (seconds on macOS), which
     # costs more than they save on these small files.
     parser.add_argument("--num-workers", type=int, default=0, help="extra processes reading files")
-    parser.add_argument("--output", type=Path, help="also save the results to this JSON file")
+    parser.add_argument("--output", type=Path, help="save the results to this JSON file (with --run, default "
+                                                     "<run folder>/evaluation.json)")
     args = parser.parse_args()
+    if not args.keras_weights and (args.base_filters is not None or args.bands is not None):
+        parser.error("--base-filters and --bands only apply to --keras-weights (a run reads them from its config)")
 
     if args.run:
-        results = evaluate_run(args.run, get_device(args.device), args.num_workers)
-        for name, scores in results.items():
+        results = evaluate_run(args.run, get_device(args.device), args.num_workers, args.split_file)
+        for name in ["test", "manual"]:
+            scores = results[name]
             print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
                   f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
-        (args.run / "evaluation.json").write_text(json.dumps(results, indent=2) + "\n")
-        return
-
-    rows = select_rows(args.split_file, "test", "manual", "full")
-    print(f"{len(rows)} patches from {rows['scene_id'].nunique()} scenes, "
-          f"{fire_free_scenes(rows).sum()} of them in scenes without fire")
-
-    if args.keras_weights:
-        bands: list[str] = list(BANDS_IN_FILE) if args.bands == ["all"] else args.bands
-        model = UNet(in_channels=len(bands), base_filters=args.base_filters)
-        load_keras_weights(model, args.keras_weights)
-        device = get_device(args.device)
-        dataset = FireDataset(args.split_file, "test", bands, "manual", "full")
-        results = evaluate_model(model, dataset, device, args.num_workers)
-        results = {"weights": str(args.keras_weights), "bands": bands, "device": describe_device(device), **results}
+        output = args.output or args.run / "evaluation.json"
     else:
-        results = {"algorithm": args.algorithm, **evaluate_algorithm(rows, args.algorithm)}
+        rows = select_rows(args.split_file, "test", "manual", "full")
+        print(f"{len(rows)} patches from {rows['scene_id'].nunique()} scenes, "
+              f"{fire_free_scenes(rows).sum()} of them in scenes without fire")
+        if args.keras_weights:
+            bands: list[str] = args.bands or ["B7", "B6", "B2"]
+            if bands == ["all"]:
+                bands = list(BANDS_IN_FILE)
+            model = UNet(in_channels=len(bands), base_filters=args.base_filters or 16)
+            load_keras_weights(model, args.keras_weights)
+            device = get_device(args.device)
+            dataset = FireDataset(args.split_file, "test", bands, "manual", "full")
+            results = evaluate_model(model, dataset, device, args.num_workers)
+            results = {"weights": str(args.keras_weights), "bands": bands, "device": describe_device(device), **results}
+        else:
+            results = {"algorithm": args.algorithm, **evaluate_algorithm(rows, args.algorithm)}
+        results["manual_split_sha256"] = split_fingerprint(args.split_file)
+        for name, value in results.items():
+            print(f"  {name:20s} {value:.4f}" if isinstance(value, float) else f"  {name:20s} {value}")
+        output = args.output
 
-    for name, value in results.items():
-        print(f"  {name:20s} {value:.4f}" if isinstance(value, float) else f"  {name:20s} {value}")
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(results, indent=2) + "\n")
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(results, indent=2) + "\n")
 
 
 if __name__ == "__main__":
