@@ -36,3 +36,6 @@ dev = [
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
+
+[tool.pytest.ini_options]
+pythonpath = ["tests"]  # lets tests import tests/helpers.py

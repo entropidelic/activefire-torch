@@ -1,0 +1,7 @@
+# R1: U-Net-Light (3c) trained on voting masks, Split P, as in the paper.
+# Unlisted settings keep the original's values (see DEFAULT_SETTINGS in train.py).
+split_file: data/splits/patch_voting.csv
+mask_source: voting
+version: fire_only
+bands: [B7, B6, B2]
+base_filters: 16

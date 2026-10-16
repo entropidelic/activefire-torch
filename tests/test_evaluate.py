@@ -1,20 +1,11 @@
 import numpy as np
 import pandas as pd
-import rasterio
 import torch
-from rasterio.transform import from_origin
 from torch import nn
 
 from activefire_torch.dataset import FireDataset, select_rows
 from activefire_torch.evaluate import evaluate_algorithm, evaluate_model
-
-
-def write_tif(path, array):
-    with rasterio.open(
-        path, "w", driver="GTiff", width=array.shape[2], height=array.shape[1], count=array.shape[0],
-        dtype=array.dtype, crs="EPSG:32650", transform=from_origin(0, 0, 30, 30),
-    ) as dst:
-        dst.write(array)
+from helpers import write_tif
 
 
 def mask_with_fire_at(folder, name, pixels):

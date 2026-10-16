@@ -1,27 +1,10 @@
 import numpy as np
 import pandas as pd
 import pytest
-import rasterio
 import torch
-from rasterio.transform import from_origin
 
 from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, compute_band_stats, read_image
-
-
-def write_tif(path, array):
-    """Write a [bands, height, width] array as a small GeoTIFF."""
-    with rasterio.open(
-        path,
-        "w",
-        driver="GTiff",
-        width=array.shape[2],
-        height=array.shape[1],
-        count=array.shape[0],
-        dtype=array.dtype,
-        crs="EPSG:32650",
-        transform=from_origin(0, 0, 30, 30),
-    ) as dst:
-        dst.write(array)
+from helpers import write_tif
 
 
 def test_read_image_picks_bands_by_name(tmp_path):

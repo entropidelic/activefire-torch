@@ -1,10 +1,16 @@
+import sys
+
+import numpy as np
 import pandas as pd
+import pytest
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from activefire_torch import train
 from activefire_torch.models import UNet
-from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, train_one_epoch, validate
+from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, read_config, train_one_epoch, validate
+from helpers import write_tif
 
 
 def fake_batch():
@@ -66,3 +72,55 @@ def test_fit_stops_early_and_saves_the_last_epoch(tmp_path):
     for name, value in model.state_dict().items():
         assert torch.equal(saved[name], value), name
     assert pd.read_csv(tmp_path / "history.csv")["epoch"].tolist() == [1, 2, 3]
+
+
+def test_config_with_a_typo_is_rejected(tmp_path):
+    config = tmp_path / "run.yaml"
+    config.write_text("split_file: x.csv\nmask_source: voting\nversion: fire_only\nbands: [B7]\npateince: 10\n")
+    with pytest.raises(ValueError, match="pateince"):
+        read_config(config)
+
+
+def write_fake_run(folder):
+    """8 patches of 32 x 32 with a 4 x 4 fire at a random place (6 train, 2 val),
+    and a config file for a 2-epoch run on the CPU."""
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(8):
+        image = rng.integers(0, 10000, size=(10, 32, 32), dtype=np.uint16)
+        mask = np.zeros((1, 32, 32), dtype=np.uint8)
+        row, column = rng.integers(0, 28, size=2)
+        image[:, row : row + 4, column : column + 4] = 60000
+        mask[:, row : row + 4, column : column + 4] = 1
+        write_tif(folder / f"image{i}.tif", image)
+        write_tif(folder / f"mask{i}.tif", mask)
+        rows.append({"image": str(folder / f"image{i}.tif"), "mask_voting": str(folder / f"mask{i}.tif"),
+                     "split": "train" if i < 6 else "val"})
+    pd.DataFrame(rows).to_csv(folder / "split.csv", index=False)
+
+    config = folder / "run.yaml"
+    config.write_text(
+        f"split_file: {folder / 'split.csv'}\nmask_source: voting\nversion: fire_only\nbands: [B7, B6, B2]\n"
+        "base_filters: 4\nbatch_size: 2\nmax_epochs: 2\ndevice: cpu\n"
+    )
+    return config
+
+
+def run_training(config, seed, runs_folder, monkeypatch):
+    """Run the training command and return its history.csv."""
+    monkeypatch.setattr(train, "RUNS_FOLDER", runs_folder)
+    monkeypatch.setattr(sys, "argv", ["train", str(config), "--seed", str(seed)])
+    train.main()
+    (run_folder,) = runs_folder.iterdir()
+    return pd.read_csv(run_folder / "history.csv")
+
+
+def test_same_seed_gives_the_same_run(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    first = run_training(config, 1, tmp_path / "first", monkeypatch)
+    second = run_training(config, 1, tmp_path / "second", monkeypatch)
+    other_seed = run_training(config, 2, tmp_path / "other", monkeypatch)
+
+    losses = ["train_loss", "val_loss"]
+    assert first[losses].equals(second[losses])
+    assert not first[losses].equals(other_seed[losses])
