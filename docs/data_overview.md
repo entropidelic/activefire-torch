@@ -149,6 +149,9 @@ So do the algorithms' own masks. In %, measured on the M3 Max, 2026-10-15:
 | Murphy alone | 76.6 / 96.1 / 74.3 / 85.2 | 76.58 / 96.09 / 74.27 / 85.23 |
 | Kumar-Roy alone | 82.3 / 68.4 / 59.7 / 74.7 | 82.29 / 68.44 / 59.65 / 74.73 |
 
+Average precision, which the paper does not report: 0.929 for Voting,
+U-Net-Light (3c), on the same 9,044 patches (logit-bin method, D22).
+
 Commands (the result files stay on the machine that made them):
 `uv run evaluate --keras-weights data/raw/weights/voting/voting/<model folder>/model_unet_Voting_final_weights.h5`
 (add `--base-filters 64` for U-Net, and `--bands all` for 10c), and

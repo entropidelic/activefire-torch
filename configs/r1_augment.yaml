@@ -1,0 +1,10 @@
+# R1 with augmentation: random 90° turns and mirroring of the training patches
+# (dataset.py), everything else as R1, to measure augmentation against R1 on
+# the same split. Unlisted settings keep the original's values (DEFAULT_SETTINGS
+# in train.py).
+split_file: data/splits/patch_voting.csv
+mask_source: voting
+version: fire_only
+bands: [B7, B6, B2]
+base_filters: 16
+augment: true
