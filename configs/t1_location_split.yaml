@@ -1,5 +1,5 @@
 # T1: R1's settings on Split S, where whole locations (WRS path/row) go to
-# train, validation or test (D15), so no test location is seen in training.
+# train, validation or test, so no test location is seen in training.
 # The split is the only change from R1. Unlisted settings keep the original's
 # values (DEFAULT_SETTINGS in train.py).
 split_file: data/splits/scene.csv

@@ -26,7 +26,7 @@ from activefire_torch.device import describe_device, get_device
 from activefire_torch.metrics import PixelCounts, ScoreHistogram
 from activefire_torch.models import UNet
 
-BATCH_SIZE = 16  # as the paper states (D11)
+BATCH_SIZE = 16  # as the paper states
 LEARNING_RATE = 0.001  # Keras Adam default, used by the original
 ADAM_EPS = 1e-7  # Keras Adam default (PyTorch's is 1e-8)
 MAX_EPOCHS = 50

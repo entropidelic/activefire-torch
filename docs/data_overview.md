@@ -2,8 +2,8 @@
 
 A short overview of the path from downloaded files to numbers, and of what
 we learned about the data on the way. Details and sources are in
-`data_inspection.md` (measurements), `DECISIONS.md` (choices, as Dn) and
-`paper_notes.md` (the paper and original code).
+`data_inspection.md` (measurements) and `paper_notes.md` (the paper and
+original code).
 
 ```
 downloaded files ──► one table of patches ──► splits ──► model input ──► metrics
@@ -27,7 +27,7 @@ about 185 km wide) into **patches** of 256 x 256 pixels (30 m per pixel, so
   the fire by hand. It is only for testing, and it is where the paper's
   headline result comes from.
 
-The full dataset has 11 regions (~200 GB). We use three (D8, D17):
+The full dataset has 11 regions (~200 GB). We use three:
 
 | Region | Patches | Scenes | Locations | With a voting mask | On disk |
 |---|---|---|---|---|---|
@@ -54,7 +54,7 @@ as an all-zero mask.
 ## 3. What the data looks like (characterization)
 
 **Only patches with fire were kept.** Every one of the 17,106 patches has a
-mask from at least one algorithm (D16). A whole scene would give ~880 patches;
+mask from at least one algorithm. A whole scene would give ~880 patches;
 we have 18 per scene on average. So:
 - there are no ordinary fire-free landscapes in the training regions;
 - a patch without a voting mask is one where the algorithms did not agree
@@ -94,17 +94,17 @@ Two schemes, both 40% / 10% / 50% with seed 42, the original's numbers:
   each mask source and using only patches with that source's mask. Patches
   of the same scene, or the same place on another date, can land in both
   training and test, which can make test scores optimistic.
-- **Split S (Stage 2):** whole **locations** go to a split (D15), so a test
+- **Split S (Stage 2):** whole **locations** go to a split, so a test
   location is never seen in training, on any date. Each region is split on
   its own, so every region is in every split.
-  - Voting patches: 3,928 train, 1,145 validation, 4,980 test (D19).
+  - Voting patches: 3,928 train, 1,145 validation, 4,980 test.
   - Proportions are counted in locations, so patch shares drift a little.
   - The 2 manual-set locations both fell in Split S test, so no Stage 2
     model trains on them.
 
 The split files (`data/splits/*.csv`) are fixed once and shared by every run.
 The cross-region experiment T1b selects from them: train on two regions, test
-on the third (D20).
+on the third.
 
 ## 5. From a patch to model input (`dataset.py`)
 
@@ -130,7 +130,7 @@ For each row of a split file, `FireDataset` returns an image and its mask:
   when its probability is above 0.25, the paper's threshold. Average
   precision uses a 10,000-bin histogram of the model's logits, because sorting
   billions of pixels does not fit in memory (within 0.0001 of the exact value
-  on real predictions; D22).
+  on real predictions).
 
 ## 7. Check: the authors' trained models in our pipeline (R0)
 
@@ -150,7 +150,7 @@ So do the algorithms' own masks. In %, measured on the M3 Max, 2026-10-15:
 | Kumar-Roy alone | 82.3 / 68.4 / 59.7 / 74.7 | 82.29 / 68.44 / 59.65 / 74.73 |
 
 Average precision, which the paper does not report: 0.929 for Voting,
-U-Net-Light (3c), on the same 9,044 patches (logit-bin method, D22).
+U-Net-Light (3c), on the same 9,044 patches (logit-bin method).
 
 Commands (the result files stay on the machine that made them):
 `uv run evaluate --keras-weights data/raw/weights/voting/voting/<model folder>/model_unet_Voting_final_weights.h5`
@@ -161,7 +161,7 @@ Commands (the result files stay on the machine that made them):
 reported metrics on the manual set. That checks the evaluation path: the
 model's structure, the weight conversion, how images are read and scaled,
 how manual masks are read, and the metrics. It does not check the training
-code (loss, optimizer, data loading for training); the sanity check (D21)
-and R1 exercise that. A gap between our trained models and the paper can
+code (loss, optimizer, data loading for training); a sanity check (the
+model memorizing 10 patches) and R1 exercise that. A gap between our trained models and the paper can
 come from the training data (3 of 11 regions) and split, from randomness, or
 from differences in the training code.

@@ -2,7 +2,7 @@
 
 Split P (Stage 1) copies the original src/utils/split_dataset.py: patches are
 assigned at random. Split S (Stage 2) assigns whole locations (WRS path/row),
-so no test location is seen in training, on any date (D15).
+so no test location is seen in training, on any date.
 
 Run from the repo root after downloading the regions:
     uv run splits

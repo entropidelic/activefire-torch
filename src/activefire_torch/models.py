@@ -13,7 +13,7 @@ from torch import nn
 BATCHNORM_EPS = 0.001
 BATCHNORM_MOMENTUM = 0.01
 
-# Weight init follows the original (D18): He normal for the block convolutions,
+# Weight init follows the original: He normal for the block convolutions,
 # Glorot uniform (Keras's default) for the others, zero biases.
 # `type: ignore` on zeros_: PyTorch types bias as optional.
 

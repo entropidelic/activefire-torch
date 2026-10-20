@@ -1,6 +1,6 @@
 # Paper and original code notes
 
-Facts extracted from the paper and the original implementation. Every fact has a source. Anything that is our interpretation, not stated in a source, is marked **[interpretation]**. Anything the sources do not say is marked **not stated**, together with the default we use (also logged in `DECISIONS.md`).
+Facts extracted from the paper and the original implementation. Every fact has a source. Anything that is our interpretation, not stated in a source, is marked **[interpretation]**. Anything the sources do not say is marked **not stated**, together with the default we use.
 
 **Sources**
 - **Paper:** Pereira, Fusioka, Nassu, Minetto (2021). *Active Fire Detection in Landsat-8 Imagery: a Large-Scale Dataset and a Deep-Learning Study.* ISPRS Journal of Photogrammetry and Remote Sensing, doi:10.1016/j.isprsjprs.2021.06.002. We read the preprint arXiv:2101.03409v2 (2 Jul 2021). Page numbers refer to that PDF.
@@ -195,8 +195,8 @@ The abstract's "87.2% precision and 92.4% recall" is the **Voting / U-Net-Light 
 
 - **Main comparison mask: Voting.** It is the source of the paper's headline result and the best performer on the manual set. Baseline runs (plan Phase 3.4) use Voting masks, and Table 2/3 Voting rows are the reference numbers.
 - Our numbers will not be directly comparable, for these reasons (updated 2026-10-15; an earlier version said 2 regions and scene splits):
-  1. We train on 3 of 11 regions (D8, D17).
-  2. Stage 1 copies the original's random patch split (Split P). Stage 2 splits by location (Split S, D15), which is stricter: no test location is seen in training.
+  1. We train on 3 of 11 regions.
+  2. Stage 1 copies the original's random patch split (Split P). Stage 2 splits by location (Split S), which is stricter: no test location is seen in training.
   3. Our test split is a different set of patches, so comparisons with Table 2 are approximate. The manual set (Table 3) is the same data as the paper's.
   4. 2 of the 13 manual-set locations (44 patches) also appear in our training regions (`data_inspection.md`).
 

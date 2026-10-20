@@ -18,7 +18,7 @@ Measured on the M3 Max, 2026-10-15, from `data/splits/scene.csv` and
 - Patches per scene: 18.0 on average, from 1 to 365. South America has far
   more fire per scene (33.5 patches per scene, against 8–10 elsewhere).
 - Every patch has a mask from at least one algorithm (17,106 of 17,106), as
-  with two regions (D16).
+  with two regions.
 - Voting masks cover 68% of South America's patches, against 27%
   (North_America2) and 53% (Oceania).
 - No location (path/row) appears in more than one region, so splitting each
@@ -63,7 +63,7 @@ only patches with a mask file from that source; "full" counts all patches.
 | Manual set | Schroeder | 227 | 0 | 4 | 11,450 | 0.385% | 0.010% |
 
 - No mask file is empty: a mask file exists only where its source found fire,
-  so "no file" and "no fire" mean the same thing (as assumed in D9 and D16).
+  so "no file" and "no fire" mean the same thing, as assumed so far.
 - **Fire is about 1 pixel in 5,500** in the Stage 1 training data (voting,
   fire_only: 0.018%, about 12 fire pixels per 256 x 256 patch on average).
   Half of all mask files have at most 2 fire pixels (2 x 30 m pixels).
@@ -103,7 +103,7 @@ Measured with the notebook on the M3 Max, 2026-10-15.
 A full Landsat-8 scene is about 7,600 × 7,600 pixels, which would give about
 880 patches of 256 × 256. With 8.7 per scene, and every image having at least
 one mask, **the dataset only keeps patches where at least one algorithm found
-fire** (D16).
+fire**.
 
 Mask files per source (a mask file exists only where that source found fire):
 
@@ -119,7 +119,7 @@ Voting and intersection masks are included in the download, so they do not
 have to be built from the three algorithms.
 
 The 598 scenes cover **504 locations** (WRS path/rows), so 94 scenes are a
-second picture of a location already in the list, on another date (D15).
+second picture of a location already in the list, on another date.
 
 ### Split S (by location), all patches
 
@@ -147,7 +147,7 @@ often there.
 
 ### Open question for Checkpoint A: the small validation set
 
-**Resolved:** South_America was added (option 3, D17); the split is kept as is (D19) and T1b changed to leave-one-region-out (D20). The text below is the question as it stood with two regions.
+**Resolved:** South_America was added (option 3); the split is kept as is, and T1b changed to leave-one-region-out (train on two regions, test on the third). The text below is the question as it stood with two regions.
 
 With voting masks, Split S leaves 128 validation patches in total, and only
 39 for North_America2. That matters most for T1b: training on North America

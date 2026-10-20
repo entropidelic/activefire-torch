@@ -20,5 +20,6 @@ runs/
 # OS
 .DS_Store
 
-# Local planning notes
+# Local planning notes and decision log
 plan.md
+docs/DECISIONS.md

@@ -49,7 +49,7 @@ def select_rows(split_file: str | Path, split: str, mask_source: str, version: s
     mask_source  e.g. "voting"
     version      "fire_only": only patches with a mask from mask_source, as in
                  the original. "full": all patches; those without a mask get an
-                 all-zero mask (patches where only other sources found fire, D16).
+                 all-zero mask (patches where only other sources found fire).
     """
     if version not in ("fire_only", "full"):
         raise ValueError(f"Unknown version {version!r}; use 'fire_only' or 'full'")

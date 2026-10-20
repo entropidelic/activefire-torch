@@ -7,8 +7,7 @@
 #   manual   the manually annotated patches (final evaluation set)
 #   regions  three regions of the full dataset, Oceania (~2 GB),
 #            North_America2 (~3 GB) and South_America (~13 GB), used for
-#            training (see docs/DECISIONS.md D8 and D17). Regions already
-#            downloaded are skipped.
+#            training. Regions already downloaded are skipped.
 #   weights  the authors' trained Keras weights, one zip per mask source
 #            (~265 MB each, three models per zip), for R0
 #
