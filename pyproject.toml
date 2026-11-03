@@ -10,20 +10,18 @@ requires-python = ">=3.13"
 dependencies = [
     "h5py>=3.16.0",
     "matplotlib>=3.11.2",
+    "mlflow>=3.17.2",
     "numpy>=2.5.4",
     "pandas>=3.0.6",
     "pyyaml>=6.0.3",
     "rasterio>=1.5.2",
     "scikit-learn>=1.9.1",
-    "tensorboard>=2.21.0",
     "torch>=2.14.1",
-    "tqdm>=4.70.1",
-    "wandb>=0.30.0",
 ]
 
 [project.scripts]
-train = "activefire_torch.train:main"  # uv run train <config> | uv run train --resume <run folder>
-evaluate = "activefire_torch.evaluate:main"  # uv run evaluate --run <run folder>
+train = "activefire_torch.train:main"  # uv run train <config> | uv run train --resume <run id>
+evaluate = "activefire_torch.evaluate:main"  # uv run evaluate --run <run id>
 splits = "activefire_torch.splits:main"  # uv run splits
 
 [build-system]

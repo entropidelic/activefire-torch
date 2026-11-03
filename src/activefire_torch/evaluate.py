@@ -7,8 +7,11 @@
 A patch has a manual mask file only if it contains fire; every other patch,
 including the 3 fire-free scenes, is evaluated with an all-zero mask.
 
+A trained run's results are added to its MLflow run, as test_<score> and
+manual_<score> metrics.
+
 Run from the repo root, after `uv run splits`:
-    uv run evaluate --run runs/<run folder>
+    uv run evaluate --run <run id>
     uv run evaluate --keras-weights <file.h5> [--base-filters 64] [--bands all]
     uv run evaluate --algorithm schroeder
 """
@@ -18,13 +21,15 @@ import json
 import time
 from pathlib import Path
 
+import mlflow
+import mlflow.artifacts
 import numpy as np
 import pandas as pd
 import torch
-import yaml
 from torch import nn
 from torch.utils.data import DataLoader
 
+from activefire_torch import tracking
 from activefire_torch.dataset import BANDS_IN_FILE, FireDataset, read_mask, select_rows, split_fingerprint
 from activefire_torch.device import DEVICE_CHOICES, describe_device, get_device
 from activefire_torch.metrics import PixelCounts, ScoreHistogram
@@ -72,18 +77,19 @@ def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device,
 
 
 def evaluate_run(
-    run_folder: Path, device: torch.device, num_workers: int, manual_split_file: Path = MANUAL_SPLIT_FILE
+    run_id: str, device: torch.device, num_workers: int, manual_split_file: Path = MANUAL_SPLIT_FILE
 ) -> dict:
     """A trained run's final weights, on its own test split and on the manual set.
 
     Bands, model size, scaling and band statistics come from the run's
-    config.yaml, so the model sees its inputs exactly as in training.
+    config.yaml in MLflow, so the model sees its inputs exactly as in training.
     """
-    record = yaml.safe_load((run_folder / "config.yaml").read_text())
+    record = tracking.read_record(run_id)
     if split_fingerprint(record["split_file"]) != record["split_file_sha256"]:
-        raise ValueError(f"{record['split_file']} has changed since {run_folder} was trained")
+        raise ValueError(f"{record['split_file']} has changed since run {run_id} was trained")
     model = UNet(in_channels=len(record["bands"]), base_filters=record["base_filters"])
-    model.load_state_dict(torch.load(run_folder / "weights.pt", map_location="cpu"))
+    weights = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="weights.pt")
+    model.load_state_dict(torch.load(weights, map_location="cpu"))
 
     test_set = FireDataset(
         split_file=record["split_file"],
@@ -139,7 +145,7 @@ def evaluate_algorithm(rows: pd.DataFrame, algorithm: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     what = parser.add_mutually_exclusive_group(required=True)
-    what.add_argument("--run", type=Path, help="run folder of one of our trained models")
+    what.add_argument("--run", help="MLflow run id of one of our trained models")
     what.add_argument("--keras-weights", type=Path, help="the authors' .h5 weights file")
     what.add_argument("--algorithm", choices=["schroeder", "murphy", "kumar-roy"], help="score this algorithm's masks")
     parser.add_argument("--base-filters", type=int, help="with --keras-weights: 16 (default) for U-Net-Light, 64 for U-Net")
@@ -149,19 +155,23 @@ def main() -> None:
     # Worker processes each start by importing torch (seconds on macOS), which
     # costs more than they save on these small files.
     parser.add_argument("--num-workers", type=int, default=0, help="extra processes reading files")
-    parser.add_argument("--output", type=Path, help="save the results to this JSON file (with --run, default "
-                                                     "<run folder>/evaluation.json)")
+    parser.add_argument("--output", type=Path, help="also save the results to this JSON file")
     args = parser.parse_args()
     if not args.keras_weights and (args.base_filters is not None or args.bands is not None):
         parser.error("--base-filters and --bands only apply to --keras-weights (a run reads them from its config)")
 
     if args.run:
+        tracking.setup()
         results = evaluate_run(args.run, get_device(args.device), args.num_workers, args.split_file)
-        for name in ["test", "manual"]:
-            scores = results[name]
-            print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
-                  f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
-        output = args.output or args.run / "evaluation.json"
+        with mlflow.start_run(run_id=args.run):
+            for name in ["test", "manual"]:
+                scores = results[name]
+                print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
+                      f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
+                mlflow.log_metrics({f"{name}_{score}": value for score, value in scores.items()})
+            # Tags, not parameters: a run can be evaluated again on a newer manual split file.
+            mlflow.set_tag("manual_split_sha256", results["manual_split_sha256"])
+        output = args.output
     else:
         rows = select_rows(args.split_file, "test", "manual", "full")
         print(f"{len(rows)} patches from {rows['scene_id'].nunique()} scenes, "

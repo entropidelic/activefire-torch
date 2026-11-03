@@ -22,8 +22,9 @@ run records a fingerprint of the split file it used.
 
 Run from the repo root.
 
-Train a model with the settings in a config file. Each run gets its own folder
-in `runs/`; `--seed` changes the random seed (default 0).
+Train a model with the settings in a config file. Each run is recorded in
+MLflow (settings, per-epoch metrics, example predictions, final weights) and
+gets an MLflow run id; `--seed` changes the random seed (default 0).
 
 ```
 uv run train configs/r1_unet_light_voting.yaml [--seed 1]
@@ -32,14 +33,14 @@ uv run train configs/r1_unet_light_voting.yaml [--seed 1]
 Continue an interrupted run from its last finished epoch.
 
 ```
-uv run train --resume runs/<run folder>
+uv run train --resume <run id>
 ```
 
 Evaluate a trained run on its own test split and on the manually annotated set.
-The results are saved to `evaluation.json` in the run folder.
+The results are added to the run in MLflow, as `test_*` and `manual_*` metrics.
 
 ```
-uv run evaluate --run runs/<run folder>
+uv run evaluate --run <run id>
 ```
 
 Evaluate the authors' trained Keras weights on the manually annotated set
@@ -57,11 +58,12 @@ kumar-roy) against the manually annotated set.
 uv run evaluate --algorithm schroeder
 ```
 
-Watch training curves and example predictions in TensorBoard, at
-http://localhost:6006.
+Browse and compare runs, their training curves and example predictions in
+MLflow, at http://localhost:5000 (add `--host 0.0.0.0` to open it from another
+machine).
 
 ```
-uv run tensorboard --logdir runs
+uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db
 ```
 
 Run the tests.
@@ -77,6 +79,7 @@ uv run pytest
 | `configs/` | one YAML file per kind of training run |
 | `data/raw/` | downloaded images, masks and the authors' weights |
 | `data/splits/` | split files written by `uv run splits` |
-| `runs/<run>/` | one folder per training run: settings (`config.yaml`), per-epoch results (`history.csv`), final weights (`weights.pt`), checkpoint while training, TensorBoard logs, and `evaluation.json` after `uv run evaluate --run` |
+| `mlruns/` | MLflow's database and files: every run's settings, metrics, example predictions and final weights |
+| `runs/<run id>/` | a run's working files: the checkpoint while training, `history.csv`, and the final weights |
 | `results/figures/` | figures |
 | `results/r0/` | evaluation outputs of the authors' models |

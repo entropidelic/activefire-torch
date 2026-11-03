@@ -6,15 +6,16 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Data: downloaded or generated, never committed. The split files are
-# recreated by `python -m activefire_torch.splits`; each run records a
-# fingerprint of the split file it used (split_file_sha256 in config.yaml).
+# recreated by `uv run splits`; each run records a
+# fingerprint of the split file it used (split_file_sha256 in its config.yaml
+# in MLflow).
 data/
 
 # Evaluation output files (JSON), kept only on the machine that made them
 results/r0/
 
-# Training runs (settings, per-epoch results, weights, logs) stay on the
-# machine that made them
+# Training runs' working files (checkpoint, history.csv, final weights); each
+# run's record is in MLflow (mlruns/, below)
 runs/
 
 # OS
@@ -23,3 +24,6 @@ runs/
 # Local planning notes and decision log
 plan.md
 docs/DECISIONS.md
+
+# MLflow tracking database and files (src/activefire_torch/tracking.py)
+mlruns/

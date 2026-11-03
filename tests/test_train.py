@@ -1,14 +1,14 @@
 import sys
 
+import mlflow
 import numpy as np
 import pandas as pd
 import pytest
 import torch
-import yaml
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from activefire_torch import train
+from activefire_torch import tracking, train
 from activefire_torch.evaluate import evaluate_run
 from activefire_torch.models import UNet
 from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, read_config, train_one_epoch, validate
@@ -63,7 +63,8 @@ def test_fit_stops_early_and_saves_the_last_epoch(tmp_path):
     opposite = DataLoader(TensorDataset(images, 1 - masks), batch_size=2)
     torch.manual_seed(0)
     model = UNet(in_channels=3, base_filters=8)
-    history = fit(model, fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
+    with mlflow.start_run():
+        history = fit(model, fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
     val_losses = [row["val_loss"] for row in history]
     # Epoch 1 sets the best loss; epochs 2 and 3 are worse; stop after epoch 3.
     assert len(history) == 3
@@ -152,10 +153,13 @@ def test_interrupted_run_resumes_where_it_stopped(tmp_path, monkeypatch):
     monkeypatch.setattr(train, "validate", validate_until_power_cut)
     torch.manual_seed(0)
     with pytest.raises(RuntimeError, match="power cut"):
-        fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
+        with mlflow.start_run():
+            fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
     monkeypatch.setattr(train, "validate", real_validate)
 
-    history = fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
+    with mlflow.start_run():
+        history = fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path,
+                      patience=2)
     # Epochs 1-2 come from before the cut. Epoch 3 is the second worse epoch in
     # a row only if the early-stopping counter was restored, so the run stops there.
     assert [row["epoch"] for row in history] == [1, 2, 3]
@@ -175,7 +179,8 @@ def test_evaluating_a_run_uses_its_training_inputs(tmp_path, monkeypatch):
     manual = split[split["split"] == "test"].rename(columns={"mask_voting": "mask_manual"})
     manual.to_csv(tmp_path / "manual.csv", index=False)
 
-    results = evaluate_run(run_folder, torch.device("cpu"), num_workers=0, manual_split_file=tmp_path / "manual.csv")
+    run_id = run_folder.name  # the working folder is named after the MLflow run
+    results = evaluate_run(run_id, torch.device("cpu"), num_workers=0, manual_split_file=tmp_path / "manual.csv")
     last_epoch = history.iloc[-1]
     for name in ["tp", "fp", "fn"]:
         assert results["test"][name] == last_epoch[f"val_{name}"], name
@@ -186,7 +191,8 @@ def test_resume_refuses_a_changed_split_and_keeps_the_device_setting(tmp_path, m
     config = write_fake_run(tmp_path)
     run_training(config, 0, tmp_path / "runs", monkeypatch)
     (run_folder,) = (tmp_path / "runs").iterdir()
-    record = yaml.safe_load((run_folder / "config.yaml").read_text())
+    run_id = run_folder.name  # the working folder is named after the MLflow run
+    record = tracking.read_record(run_id)
     # "device" must stay a valid setting (e.g. not "cuda (NVIDIA ...)"), so resume can use it.
     assert record["device"] == "cpu"
 
@@ -195,8 +201,8 @@ def test_resume_refuses_a_changed_split_and_keeps_the_device_setting(tmp_path, m
     split.loc[0, "split"] = "val"
     split.to_csv(tmp_path / "split.csv", index=False)
 
-    monkeypatch.setattr(sys, "argv", ["train", "--resume", str(run_folder)])
+    monkeypatch.setattr(sys, "argv", ["train", "--resume", run_id])
     with pytest.raises(SystemExit, match="has changed"):
         train.main()
     with pytest.raises(ValueError, match="has changed"):
-        evaluate_run(run_folder, torch.device("cpu"), num_workers=0)
+        evaluate_run(run_id, torch.device("cpu"), num_workers=0)
