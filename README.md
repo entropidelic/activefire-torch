@@ -59,11 +59,14 @@ uv run evaluate --algorithm schroeder
 ```
 
 Browse and compare runs, their training curves and example predictions in
-MLflow, at http://localhost:5000 (add `--host 0.0.0.0` to open it from another
-machine).
+MLflow, at http://localhost:5000. To open it from another machine, add `--host
+0.0.0.0` and go to http://<this machine's IP>:5000 (a name like `mac.local`
+also needs `--allowed-hosts mac.local`). `uv run tracking` is MLflow's own
+command (`mlflow`), pointed at this repo's runs; it takes any of its
+subcommands, e.g. `uv run tracking runs list --experiment-id 1`.
 
 ```
-uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db
+uv run tracking ui
 ```
 
 Run the tests.

@@ -23,6 +23,7 @@ dependencies = [
 train = "activefire_torch.train:main"  # uv run train <config> | uv run train --resume <run id>
 evaluate = "activefire_torch.evaluate:main"  # uv run evaluate --run <run id>
 splits = "activefire_torch.splits:main"  # uv run splits
+tracking = "activefire_torch.tracking:mlflow_command"  # uv run tracking ui | uv run tracking runs list ...
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
