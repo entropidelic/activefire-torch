@@ -85,7 +85,8 @@ only patches with a mask file from that source; "full" counts all patches.
     35 patches in North_America2.
   - `105069`: 9 patches in Oceania.
 - Both locations fall in Split S **test**, so no Stage 2 model trains on
-  them. Split P (Stage 1) assigns patches at random, so some of these 44
+  them. Checked again with the three regions (2026-11-04): South America has
+  no manual-set location, and these two stay in test. Split P (Stage 1) assigns patches at random, so some of these 44
   patches end up in Stage 1 training, as they would have in the original;
   this is reported next to the comparison with the paper.
 
