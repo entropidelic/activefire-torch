@@ -1,14 +1,15 @@
 """Evaluate at the paper's threshold (0.25):
-- one of our trained runs, on its own test split (paper Table 2) and on the
-  manually annotated set (Table 3);
+- one of our trained runs, on its own test split (paper Table 2), also in its
+  full version when that adds patches, and on the manually annotated set
+  (Table 3);
 - the authors' trained weights (R0) or one algorithm's own masks (the "—" rows
   of Table 3), on the manually annotated set.
 
 A patch has a manual mask file only if it contains fire; every other patch,
 including the 3 fire-free scenes, is evaluated with an all-zero mask.
 
-A trained run's results are added to its MLflow run, as test_<score> and
-manual_<score> metrics.
+A trained run's results are added to its MLflow run, as test_<score>,
+test_full_<score> and manual_<score> metrics.
 
 Run from the repo root, after `uv run splits`:
     uv run evaluate --run <run id>
@@ -109,8 +110,23 @@ def evaluate_run(
         scaling=record["scaling"],
         band_stats=record["band_stats"],
     )
+    # The full version adds the test patches where only other algorithms found
+    # fire (Stage 2's primary metric). Split P files hold only patches with a
+    # mask from their source, so there it adds nothing and is skipped.
+    full_test_set = FireDataset(
+        split_file=record["split_file"],
+        split="test",
+        bands=record["bands"],
+        mask_source=record["mask_source"],
+        version="full",
+        scaling=record["scaling"],
+        band_stats=record["band_stats"],
+    )
+    results = {"test": evaluate_model(model, test_set, device, num_workers)}
+    if len(full_test_set) > len(test_set):
+        results["test_full"] = evaluate_model(model, full_test_set, device, num_workers)
     return {
-        "test": evaluate_model(model, test_set, device, num_workers),
+        **results,
         "manual": evaluate_model(model, manual_set, device, num_workers),
         "test_split_sha256": record["split_file_sha256"],
         "manual_split_sha256": split_fingerprint(manual_split_file),
@@ -166,7 +182,9 @@ def main() -> None:
         # Through the client, not mlflow.start_run(run_id=...): closing the run
         # again would overwrite the end time (and so the duration) of its training.
         client = mlflow.MlflowClient()
-        for name in ["test", "manual"]:
+        for name in ["test", "test_full", "manual"]:
+            if name not in results:
+                continue
             scores = results[name]
             print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
                   f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
