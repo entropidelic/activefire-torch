@@ -163,14 +163,17 @@ def main() -> None:
     if args.run:
         tracking.setup()
         results = evaluate_run(args.run, get_device(args.device), args.num_workers, args.split_file)
-        with mlflow.start_run(run_id=args.run):
-            for name in ["test", "manual"]:
-                scores = results[name]
-                print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
-                      f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
-                mlflow.log_metrics({f"{name}_{score}": value for score, value in scores.items()})
-            # Tags, not parameters: a run can be evaluated again on a newer manual split file.
-            mlflow.set_tag("manual_split_sha256", results["manual_split_sha256"])
+        # Through the client, not mlflow.start_run(run_id=...): closing the run
+        # again would overwrite the end time (and so the duration) of its training.
+        client = mlflow.MlflowClient()
+        for name in ["test", "manual"]:
+            scores = results[name]
+            print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
+                  f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
+            for score, value in scores.items():
+                client.log_metric(args.run, f"{name}_{score}", value)
+        # A tag, not a parameter: a run can be evaluated again on a newer manual split file.
+        client.set_tag(args.run, "manual_split_sha256", results["manual_split_sha256"])
         output = args.output
     else:
         rows = select_rows(args.split_file, "test", "manual", "full")
