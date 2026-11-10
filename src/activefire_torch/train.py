@@ -173,6 +173,13 @@ def fit(
         print(f"Resuming {run_folder} after epoch {checkpoint['epoch']}")
 
     for epoch in range(first_epoch, max_epochs + 1):
+        # Checked before the epoch, not after it: a run interrupted right after
+        # its last epoch's checkpoint then stops here when resumed, instead of
+        # training one more epoch.
+        if epochs_without_improvement >= patience:
+            print(f"Stopping: no lower validation loss in the last {patience} epochs")
+            break
+
         start = time.perf_counter()
         train_loss = train_one_epoch(model, train_loader, loss_function, optimizer, device)
         scores = validate(model, val_loader, loss_function, device)
@@ -217,10 +224,6 @@ def fit(
                 picture = example_picture(images[i], masks[i], probabilities[i], display_channels)
                 # MLflow takes pictures as [height, width, channels].
                 mlflow.log_image(picture.permute(1, 2, 0).numpy(), key=f"examples/{i}", step=epoch)
-
-        if epochs_without_improvement >= patience:
-            print(f"Stopping: no lower validation loss in the last {patience} epochs")
-            break
 
     # Temporary file, then rename: an interrupted save cannot leave a partial
     # weights.pt, which would mark the run as finished.
@@ -272,8 +275,16 @@ def main() -> None:
         config = {name: run_record[name] for name in REQUIRED_SETTINGS + list(DEFAULT_SETTINGS)}
         if split_fingerprint(config["split_file"]) != run_record["split_file_sha256"]:
             raise SystemExit(f"{config['split_file']} has changed since this run started; it cannot be resumed")
-        if mlflow.get_run(args.resume).info.status == "FINISHED":
+        resumed_run = mlflow.get_run(args.resume)
+        if resumed_run.info.status == "FINISHED":
             raise SystemExit(f"Run {args.resume} has finished; there is nothing to resume")
+        # Without its checkpoint the run would start again from epoch 1 and
+        # record those epochs on top of the ones already in MLflow. A run cut
+        # during its first epoch has neither, and simply starts again.
+        checkpoint_file = RUNS_FOLDER / args.resume / "checkpoint.pt"
+        if resumed_run.data.metrics and not checkpoint_file.exists():
+            raise SystemExit(f"Run {args.resume} has recorded epochs, but {checkpoint_file} is missing; "
+                             "it cannot be resumed")
     else:
         config = read_config(args.config)
         if args.seed is not None:

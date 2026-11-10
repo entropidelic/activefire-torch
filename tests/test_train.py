@@ -77,6 +77,38 @@ def test_fit_stops_early_and_saves_the_last_epoch(tmp_path):
     assert pd.read_csv(tmp_path / "history.csv")["epoch"].tolist() == [1, 2, 3]
 
 
+def test_run_cut_after_its_last_epoch_does_not_train_another(tmp_path, monkeypatch):
+    images, masks = fake_batch()
+    opposite = DataLoader(TensorDataset(images, 1 - masks), batch_size=2)  # validation only gets worse
+    real_log_metrics = mlflow.log_metrics
+    calls = 0
+
+    def log_metrics_until_power_cut(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("power cut after epoch 3's checkpoint")
+        return real_log_metrics(*args, **kwargs)
+
+    # Epoch 3 is the second worse epoch in a row, so the run would stop after
+    # it. It is cut between saving that epoch's checkpoint and stopping.
+    monkeypatch.setattr(mlflow, "log_metrics", log_metrics_until_power_cut)
+    torch.manual_seed(0)
+    with pytest.raises(RuntimeError, match="power cut"):
+        with mlflow.start_run():
+            fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path, patience=2)
+    monkeypatch.setattr(mlflow, "log_metrics", real_log_metrics)
+    after_epoch_3 = torch.load(tmp_path / "checkpoint.pt")["model"]
+
+    with mlflow.start_run():
+        history = fit(UNet(in_channels=3, base_filters=8), fake_loader(), opposite, torch.device("cpu"), tmp_path,
+                      patience=2)
+    assert [row["epoch"] for row in history] == [1, 2, 3]
+    saved = torch.load(tmp_path / "weights.pt")
+    for name, value in after_epoch_3.items():
+        assert torch.equal(saved[name], value), name
+
+
 @pytest.mark.parametrize(
     "extra, problem",
     [("pateince: 10", "pateince"), ("max_epochs: 0", "max_epochs"), ("bands: []", "bands is empty")],
@@ -206,3 +238,36 @@ def test_resume_refuses_a_changed_split_and_keeps_the_device_setting(tmp_path, m
         train.main()
     with pytest.raises(ValueError, match="has changed"):
         evaluate_run(run_id, torch.device("cpu"), num_workers=0)
+
+
+def test_resume_refuses_a_started_run_without_its_checkpoint(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    real_validate = train.validate
+    calls = 0
+
+    def validate_until_power_cut(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("power cut during epoch 2")
+        return real_validate(*args)
+
+    monkeypatch.setattr(train, "validate", validate_until_power_cut)
+    with pytest.raises(RuntimeError, match="power cut"):
+        run_training(config, 0, tmp_path / "runs", monkeypatch)
+    monkeypatch.setattr(train, "validate", real_validate)
+    (run_folder,) = (tmp_path / "runs").iterdir()
+    run_id = run_folder.name  # the working folder is named after the MLflow run
+
+    # Epoch 1 is recorded in MLflow. Without the checkpoint, resuming would
+    # train epoch 1 again and record it a second time.
+    monkeypatch.setattr(sys, "argv", ["train", "--resume", run_id])
+    (run_folder / "checkpoint.pt").rename(tmp_path / "checkpoint.pt")
+    with pytest.raises(SystemExit, match="checkpoint.pt is missing"):
+        train.main()
+
+    # With it, the run continues from epoch 2.
+    (tmp_path / "checkpoint.pt").rename(run_folder / "checkpoint.pt")
+    train.main()
+    assert pd.read_csv(run_folder / "history.csv")["epoch"].tolist() == [1, 2]
+    assert len(mlflow.MlflowClient().get_metric_history(run_id, "train_loss")) == 2
