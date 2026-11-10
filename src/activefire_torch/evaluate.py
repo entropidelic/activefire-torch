@@ -49,10 +49,30 @@ def fire_free_scenes(rows: pd.DataFrame, mask_column: str = "mask_manual") -> pd
 def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device, num_workers: int) -> dict:
     """Run the model over the dataset, in order, and score its probabilities.
     seconds_per_patch includes reading the files."""
-    in_fire_free_scene = torch.tensor(fire_free_scenes(dataset.rows, dataset.mask_column).to_numpy())
-    counts = PixelCounts()
-    fire_free_counts = PixelCounts()
-    histogram = ScoreHistogram()
+    everything = np.ones(len(dataset), dtype=bool)
+    return evaluate_subsets(model, dataset, device, num_workers, {"all": everything})["all"]
+
+
+def evaluate_subsets(
+    model: nn.Module, dataset: FireDataset, device: torch.device, num_workers: int, subsets: dict[str, np.ndarray]
+) -> dict[str, dict]:
+    """evaluate_model for several subsets of the dataset's patches at once,
+    running the model over each patch only once.
+
+    subsets  name -> one True / False per row of dataset.rows: the patches
+             that subset is scored on.
+
+    Returns name -> that subset's scores. seconds_per_patch is the same for
+    all: the time of the one pass, per patch of the dataset.
+    """
+    scorers = []
+    for chosen in subsets.values():
+        chosen = np.asarray(chosen, dtype=bool)
+        # Fire-free scenes are judged within the subset: a scene whose only
+        # fire is outside the subset counts as fire-free here.
+        fire_free = np.zeros(len(dataset), dtype=bool)
+        fire_free[chosen] = fire_free_scenes(dataset.rows[chosen], dataset.mask_column).to_numpy()
+        scorers.append((torch.tensor(chosen), torch.tensor(fire_free), PixelCounts(), PixelCounts(), ScoreHistogram()))
 
     model.to(device).eval()
     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers)
@@ -61,19 +81,25 @@ def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device,
         for batch_number, (images, masks) in enumerate(loader):
             logits = model(images.to(device)).cpu()
             probabilities = torch.sigmoid(logits)
-            counts.add(probabilities, masks)
-            histogram.add(logits, masks)
 
             first_row = batch_number * BATCH_SIZE
-            fire_free = in_fire_free_scene[first_row : first_row + len(images)]
-            fire_free_counts.add(probabilities[fire_free], masks[fire_free])
+            batch_rows = slice(first_row, first_row + len(images))
+            for chosen, fire_free, counts, fire_free_counts, histogram in scorers:
+                in_subset = chosen[batch_rows]
+                counts.add(probabilities[in_subset], masks[in_subset])
+                histogram.add(logits[in_subset], masks[in_subset])
+                in_fire_free_scene = fire_free[batch_rows]
+                fire_free_counts.add(probabilities[in_fire_free_scene], masks[in_fire_free_scene])
     seconds = time.perf_counter() - start_time
 
     return {
-        **counts.scores(),
-        "average_precision": histogram.average_precision(),
-        "fire_free_scenes_fp": fire_free_counts.fp,
-        "seconds_per_patch": seconds / len(dataset),
+        name: {
+            **counts.scores(),
+            "average_precision": histogram.average_precision(),
+            "fire_free_scenes_fp": fire_free_counts.fp,
+            "seconds_per_patch": seconds / len(dataset),
+        }
+        for name, (_, _, counts, fire_free_counts, histogram) in zip(subsets, scorers)
     }
 
 
@@ -92,15 +118,6 @@ def evaluate_run(
     weights = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="weights.pt")
     model.load_state_dict(torch.load(weights, map_location="cpu"))
 
-    test_set = FireDataset(
-        split_file=record["split_file"],
-        split="test",
-        bands=record["bands"],
-        mask_source=record["mask_source"],
-        version=record["version"],
-        scaling=record["scaling"],
-        band_stats=record["band_stats"],
-    )
     manual_set = FireDataset(
         split_file=manual_split_file,
         split="test",
@@ -110,9 +127,8 @@ def evaluate_run(
         scaling=record["scaling"],
         band_stats=record["band_stats"],
     )
-    # The full version adds the test patches where only other algorithms found
-    # fire (Stage 2's primary metric). Split P files hold only patches with a
-    # mask from their source, so there it adds nothing and is skipped.
+    # Every test patch, each with the mask of the run's source, or an all-zero
+    # mask where that source found no fire.
     full_test_set = FireDataset(
         split_file=record["split_file"],
         split="test",
@@ -122,9 +138,19 @@ def evaluate_run(
         scaling=record["scaling"],
         band_stats=record["band_stats"],
     )
-    results = {"test": evaluate_model(model, test_set, device, num_workers)}
-    if len(full_test_set) > len(test_set):
-        results["test_full"] = evaluate_model(model, full_test_set, device, num_workers)
+    # "test" is the run's own version of the test split. For a fire_only run
+    # that is the patches with a mask; the full version adds the patches where
+    # only other algorithms found fire (Stage 2's primary metric), reported as
+    # "test_full". Both come from one pass over the full set. Split P files
+    # hold only patches with a mask from their source, so there the two are
+    # the same patches and only "test" is reported.
+    everything = np.ones(len(full_test_set), dtype=bool)
+    has_mask = full_test_set.rows[full_test_set.mask_column].notna().to_numpy()
+    if record["version"] == "fire_only" and not has_mask.all():
+        subsets = {"test": has_mask, "test_full": everything}
+    else:
+        subsets = {"test": everything}
+    results = evaluate_subsets(model, full_test_set, device, num_workers, subsets)
     return {
         **results,
         "manual": evaluate_model(model, manual_set, device, num_workers),

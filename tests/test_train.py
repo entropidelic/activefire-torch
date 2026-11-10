@@ -9,7 +9,8 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from activefire_torch import tracking, train
-from activefire_torch.evaluate import evaluate_run
+from activefire_torch.dataset import FireDataset
+from activefire_torch.evaluate import evaluate_model, evaluate_run
 from activefire_torch.models import UNet
 from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, read_config, train_one_epoch, validate
 from helpers import write_tif
@@ -217,6 +218,39 @@ def test_evaluating_a_run_uses_its_training_inputs(tmp_path, monkeypatch):
     for name in ["tp", "fp", "fn"]:
         assert results["test"][name] == last_epoch[f"val_{name}"], name
     assert results["test"]["average_precision"] == pytest.approx(last_epoch["val_average_precision"])
+
+
+def test_one_pass_scores_test_and_test_full_as_two_passes_would(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    # Add two test patches without a voting mask: the first two training
+    # images again. The test split is now 2 patches with a mask and 2 without.
+    split = pd.read_csv(tmp_path / "split.csv")
+    without_mask = split.iloc[:2].assign(split="test", mask_voting=None)
+    # Mixed in between the patches with a mask, to check the rows are matched up.
+    split = pd.concat([split.iloc[:-1], without_mask, split.iloc[-1:]], ignore_index=True)
+    split.to_csv(tmp_path / "split.csv", index=False)
+    run_training(config, 0, tmp_path / "runs", monkeypatch)
+    (run_folder,) = (tmp_path / "runs").iterdir()
+
+    split[(split["split"] == "test") & split["mask_voting"].notna()].rename(
+        columns={"mask_voting": "mask_manual"}
+    ).to_csv(tmp_path / "manual.csv", index=False)
+    cpu = torch.device("cpu")
+    results = evaluate_run(run_folder.name, cpu, num_workers=0, manual_split_file=tmp_path / "manual.csv")
+
+    model = UNet(in_channels=3, base_filters=4)
+    model.load_state_dict(torch.load(run_folder / "weights.pt"))
+    for name, version, patches in [("test", "fire_only", 2), ("test_full", "full", 4)]:
+        dataset = FireDataset(tmp_path / "split.csv", "test", ["B7", "B6", "B2"], "voting", version)
+        assert len(dataset) == patches
+        separate = evaluate_model(model, dataset, cpu, num_workers=0)
+        for score in separate:
+            if score != "seconds_per_patch":
+                assert results[name][score] == pytest.approx(separate[score], nan_ok=True), (name, score)
+    # The patches without a mask add no fire, only possible false alarms.
+    assert results["test_full"]["tp"] == results["test"]["tp"]
+    assert results["test_full"]["fn"] == results["test"]["fn"]
+    assert results["test_full"]["fp"] >= results["test"]["fp"]
 
 
 def test_resume_refuses_a_changed_split_and_keeps_the_device_setting(tmp_path, monkeypatch):
