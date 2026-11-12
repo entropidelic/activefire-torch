@@ -1,0 +1,9 @@
+# R1 with near-infrared (B5) in place of blue (B2), everything else as R1, to
+# measure the band swap against R1 on the same split (docs/improvement_ideas.md).
+# The example pictures show B7 alone, in gray: the false color needs B2.
+# Unlisted settings keep the original's values (DEFAULT_SETTINGS in train.py).
+split_file: data/splits/patch_voting.csv
+mask_source: voting
+version: fire_only
+bands: [B7, B6, B5]
+base_filters: 16
