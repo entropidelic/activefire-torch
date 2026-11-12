@@ -102,3 +102,56 @@ def test_average_precision_matches_sklearn_on_realistic_scores():
     histogram.add(logits, masks)
     expected = average_precision_score(masks.numpy(), logits.double().numpy())
     assert histogram.average_precision() == pytest.approx(expected, abs=1e-3)
+
+
+def test_best_threshold_is_in_the_middle_of_the_gap_between_background_and_fire():
+    # Background at probabilities 0.3 to 0.4, above the paper's 0.25; fire at 0.9.
+    logits = torch.logit(torch.tensor([0.3, 0.4, 0.35, 0.9, 0.9]))
+    masks = torch.tensor([0.0, 0.0, 0.0, 1.0, 1.0])
+    histogram = ScoreHistogram()
+    histogram.add(logits, masks)
+
+    threshold = histogram.best_threshold()
+    middle = (torch.logit(torch.tensor(0.4)) + torch.logit(torch.tensor(0.9))) / 2
+    assert threshold == pytest.approx(float(torch.sigmoid(middle)), abs=0.005)
+    assert histogram.scores_at(threshold)["f1"] == 1.0
+
+    # Counting pixels directly at that threshold gives the same scores.
+    counts = PixelCounts(threshold)
+    counts.add(torch.sigmoid(logits), masks)
+    assert counts.scores() == histogram.scores_at(threshold)
+    # At 0.25 the background counts as fire.
+    at_paper_threshold = PixelCounts()
+    at_paper_threshold.add(torch.sigmoid(logits), masks)
+    assert at_paper_threshold.scores()["fp"] == 3
+
+
+def test_best_threshold_can_be_lower_than_the_papers():
+    # One fire pixel at 0.2, below 0.25. Taking it in also takes in the
+    # background pixel at 0.3, and is still the best F1: 6/7 against 4/5.
+    probabilities = torch.tensor([0.2, 0.6, 0.7, 0.3, 0.1])
+    masks = torch.tensor([1.0, 1.0, 1.0, 0.0, 0.0])
+    histogram = ScoreHistogram()
+    histogram.add(torch.logit(probabilities), masks)
+
+    threshold = histogram.best_threshold()
+    assert 0.1 < threshold < 0.2
+    scores = histogram.scores_at(threshold)
+    assert (scores["tp"], scores["fp"], scores["fn"]) == (3, 1, 0)
+
+
+def test_best_threshold_without_fire_and_bad_thresholds():
+    histogram = ScoreHistogram()
+    histogram.add(torch.tensor([0.0, 1.0]), torch.tensor([0.0, 0.0]))
+    assert histogram.best_threshold() is None
+    for threshold in [0.0, 1.0]:
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            histogram.scores_at(threshold)
+
+
+def test_infinite_logits_go_into_the_end_bins():
+    # A probability of exactly 1 or 0 has an infinite logit.
+    histogram = ScoreHistogram(bins=10)
+    histogram.add(torch.tensor([float("inf"), float("-inf")]), torch.tensor([1.0, 0.0]))
+    assert histogram.fire.tolist() == [0] * 9 + [1]
+    assert histogram.background.tolist() == [1] + [0] * 9

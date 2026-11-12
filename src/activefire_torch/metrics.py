@@ -6,6 +6,8 @@ computed once from the sums. Averaging per-patch scores instead would give a
 patch with one fire pixel the same weight as a large fire.
 """
 
+import math
+
 import torch
 
 # TH_FIRE in the original inference.py. A pixel is fire if its probability is
@@ -38,16 +40,20 @@ class PixelCounts:
         the counts (equal to 2PR / (P + R) whenever that is defined), so it is
         only undefined, like IoU, when there is neither fire nor any prediction.
         """
-        tp, fp, fn = self.tp, self.fp, self.fn
-        return {
-            "precision": divide(tp, tp + fp),
-            "recall": divide(tp, tp + fn),
-            "f1": divide(2 * tp, 2 * tp + fp + fn),
-            "iou": divide(tp, tp + fp + fn),
-            "tp": tp,
-            "fp": fp,
-            "fn": fn,
-        }
+        return scores_from_counts(self.tp, self.fp, self.fn)
+
+
+def scores_from_counts(tp: int, fp: int, fn: int) -> dict[str, float]:
+    """Precision, recall, F1 and IoU from pixel counts, with the counts (see PixelCounts.scores)."""
+    return {
+        "precision": divide(tp, tp + fp),
+        "recall": divide(tp, tp + fn),
+        "f1": divide(2 * tp, 2 * tp + fp + fn),
+        "iou": divide(tp, tp + fp + fn),
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+    }
 
 
 def divide(numerator: int, denominator: int) -> float:
@@ -79,7 +85,8 @@ class ScoreHistogram:
         """logits (the model's outputs, before the sigmoid) and masks of the same
         shape, e.g. [N, 1, H, W]; masks in {0, 1}."""
         position = (logits + LOGIT_LIMIT) / (2 * LOGIT_LIMIT)  # 0 at -LOGIT_LIMIT, 1 at +LOGIT_LIMIT
-        bin_index = (position * self.bins).floor().long().clamp(0, self.bins - 1).flatten().cpu()
+        # Clamped before the conversion to whole numbers, which is undefined for infinite logits.
+        bin_index = (position * self.bins).floor().clamp(0, self.bins - 1).long().flatten().cpu()
         fire = (masks == 1).flatten().cpu()
         self.fire += torch.bincount(bin_index[fire], minlength=self.bins)
         self.background += torch.bincount(bin_index[~fire], minlength=self.bins)
@@ -107,3 +114,48 @@ class ScoreHistogram:
             if fire[b] > 0:
                 average_precision += (fire[b] / total_fire) * (tp / (tp + fp))
         return average_precision
+
+    def best_threshold(self) -> float | None:
+        """The probability threshold with the highest F1 on the pixels added so
+        far; None if there is no fire. For choosing a threshold on validation
+        data, to use on other data with scores_at().
+
+        Thresholds are tried at the bin edges: "fire if the logit is in bin b
+        or above". When a row of neighboring edges share the highest F1 (no
+        pixel falls between them), the middle one is returned, the furthest
+        from the pixels on either side.
+        """
+        total_fire = int(self.fire.sum())
+        if total_fire == 0:
+            return None
+        # tp[b], fp[b]: fire and background pixels in bin b or above.
+        tp = self.fire.flip(0).cumsum(0).flip(0)
+        fp = self.background.flip(0).cumsum(0).flip(0)
+        f1 = 2 * tp / (tp + fp + total_fire)  # 2 tp / (2 tp + fp + fn), with fn = total_fire - tp
+        best_bins = (f1 == f1.max()).nonzero().flatten().tolist()
+        row = [best_bins[0]]
+        for b in best_bins[1:]:
+            if b != row[-1] + 1:
+                break
+            row.append(b)
+        best_bin = row[len(row) // 2]
+        edge = -LOGIT_LIMIT + best_bin * (2 * LOGIT_LIMIT / self.bins)  # the lowest logit in best_bin
+        return 1 / (1 + math.exp(-edge))  # sigmoid: the edge as a probability
+
+    def scores_at(self, threshold: float) -> dict[str, float]:
+        """Precision, recall, F1, IoU and counts (as PixelCounts.scores) with
+        this probability threshold, counted from the bins.
+
+        threshold  from best_threshold(). Any other value between 0 and 1 is
+                   moved to the nearest bin edge, so the scores can differ
+                   slightly from PixelCounts at that threshold.
+        """
+        if not 0 < threshold < 1:
+            raise ValueError(f"threshold must be between 0 and 1, not {threshold}")
+        logit = math.log(threshold / (1 - threshold))
+        first_fire_bin = round((logit + LOGIT_LIMIT) / (2 * LOGIT_LIMIT) * self.bins)
+        first_fire_bin = min(max(first_fire_bin, 0), self.bins)
+        tp = int(self.fire[first_fire_bin:].sum())
+        fp = int(self.background[first_fire_bin:].sum())
+        fn = int(self.fire[:first_fire_bin].sum())
+        return scores_from_counts(tp, fp, fn)

@@ -58,6 +58,26 @@ Average the probabilities of the runs that differ only in seed, then
 threshold. Usually a small, reliable gain; no evidence found for this
 dataset specifically.
 
+## How to run them
+
+The code for all three is in place (2026-11-12); none has been run on real
+data yet.
+
+| Idea | Command | Compare |
+|---|---|---|
+| 1. Band swap | `uv run train configs/r1_nir.yaml --seed <n>`, with R1's seeds | `final_val_f1` against R1's, seed by seed |
+| 2. Tuned threshold | `uv run evaluate --run <run id>`, on any trained run | `final_val_tuned_f1` against `final_val_f1` |
+| 3. Seed average | `uv run evaluate --run <id> <id> <id>` | the average's `final_val_f1` against the mean of the single runs' |
+
+- Decide on the validation scores (`final_val_*`). Look at `test_*` and
+  `manual_*` once, at the end.
+- The threshold is chosen on the validation split of whatever is evaluated,
+  so each band choice and each average gets its own.
+- Tuned scores are counted from the logit bins of the average-precision
+  histogram, so the tuned threshold is always a bin edge (`metrics.py`).
+- An average is recorded as its own MLflow run, named
+  `<config>_average_of_<n>` and tagged `averaged_runs`.
+
 ## What the literature says to skip
 
 - **Focal loss.** In Land8Fire (Table 4, one fold) it lowered the U-Net's F1

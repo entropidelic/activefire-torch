@@ -8,9 +8,9 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from activefire_torch import tracking, train
+from activefire_torch import evaluate, tracking, train
 from activefire_torch.dataset import FireDataset
-from activefire_torch.evaluate import evaluate_model, evaluate_run
+from activefire_torch.evaluate import AverageOfModels, evaluate_model, evaluate_runs
 from activefire_torch.models import UNet
 from activefire_torch.train import ADAM_EPS, LEARNING_RATE, fit, read_config, train_one_epoch, validate
 from helpers import write_tif
@@ -213,7 +213,7 @@ def test_evaluating_a_run_uses_its_training_inputs(tmp_path, monkeypatch):
     manual.to_csv(tmp_path / "manual.csv", index=False)
 
     run_id = run_folder.name  # the working folder is named after the MLflow run
-    results = evaluate_run(run_id, torch.device("cpu"), num_workers=0, manual_split_file=tmp_path / "manual.csv")
+    results = evaluate_runs([run_id], torch.device("cpu"), num_workers=0, manual_split_file=tmp_path / "manual.csv")
     last_epoch = history.iloc[-1]
     for name in ["tp", "fp", "fn"]:
         assert results["test"][name] == last_epoch[f"val_{name}"], name
@@ -236,7 +236,7 @@ def test_one_pass_scores_test_and_test_full_as_two_passes_would(tmp_path, monkey
         columns={"mask_voting": "mask_manual"}
     ).to_csv(tmp_path / "manual.csv", index=False)
     cpu = torch.device("cpu")
-    results = evaluate_run(run_folder.name, cpu, num_workers=0, manual_split_file=tmp_path / "manual.csv")
+    results = evaluate_runs([run_folder.name], cpu, num_workers=0, manual_split_file=tmp_path / "manual.csv")
 
     model = UNet(in_channels=3, base_filters=4)
     model.load_state_dict(torch.load(run_folder / "weights.pt"))
@@ -271,7 +271,7 @@ def test_resume_refuses_a_changed_split_and_keeps_the_device_setting(tmp_path, m
     with pytest.raises(SystemExit, match="has changed"):
         train.main()
     with pytest.raises(ValueError, match="has changed"):
-        evaluate_run(run_id, torch.device("cpu"), num_workers=0)
+        evaluate_runs([run_id], torch.device("cpu"), num_workers=0)
 
 
 def test_resume_refuses_a_started_run_without_its_checkpoint(tmp_path, monkeypatch):
@@ -305,3 +305,103 @@ def test_resume_refuses_a_started_run_without_its_checkpoint(tmp_path, monkeypat
     train.main()
     assert pd.read_csv(run_folder / "history.csv")["epoch"].tolist() == [1, 2]
     assert len(mlflow.MlflowClient().get_metric_history(run_id, "train_loss")) == 2
+
+
+def write_manual_split(folder):
+    """A manual set for the fake run: its test patches, with their masks as manual masks."""
+    split = pd.read_csv(folder / "split.csv")
+    manual = split[split["split"] == "test"].rename(columns={"mask_voting": "mask_manual"})
+    manual.to_csv(folder / "manual.csv", index=False)
+    return folder / "manual.csv"
+
+
+def test_evaluation_tunes_the_threshold_on_validation(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    history = run_training(config, 0, tmp_path / "runs", monkeypatch)
+    (run_folder,) = (tmp_path / "runs").iterdir()
+    results = evaluate_runs([run_folder.name], torch.device("cpu"), num_workers=0,
+                            manual_split_file=write_manual_split(tmp_path))
+
+    assert 0 < results["tuned_threshold"] < 1
+    val, test = results["final_val"], results["test"]
+    # One run's validation scores at 0.25 are its last epoch's.
+    for name in ["tp", "fp", "fn"]:
+        assert val[name] == history.iloc[-1][f"val_{name}"], name
+    # The best threshold for validation cannot score below 0.25 there.
+    assert val["tuned_f1"] >= val["f1"]
+    # The fake test split is the validation split again, so the threshold
+    # chosen on validation gives the test split the same counts.
+    for name in ["tuned_tp", "tuned_fp", "tuned_fn", "tuned_fire_free_scenes_fp"]:
+        assert test[name] == val[name], name
+
+
+class Constant(nn.Module):
+    """Predicts the same logit everywhere."""
+
+    def __init__(self, logit):
+        super().__init__()
+        self.logit = logit
+
+    def forward(self, image):
+        return torch.full_like(image[:, :1], self.logit)
+
+
+def test_average_of_models_averages_probabilities():
+    low, high = Constant(-2.0), Constant(3.0)
+    average = AverageOfModels([low, high])
+    probability = torch.sigmoid(average(torch.zeros(1, 3, 4, 4)))
+    expected = (torch.sigmoid(torch.tensor(-2.0)) + torch.sigmoid(torch.tensor(3.0))) / 2
+    assert probability.shape == (1, 1, 4, 4)
+    assert torch.allclose(probability, expected)
+
+
+def test_evaluating_several_runs_scores_their_average(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    run_training(config, 0, tmp_path / "seed0", monkeypatch)
+    run_training(config, 1, tmp_path / "seed1", monkeypatch)
+    (folder0,) = (tmp_path / "seed0").iterdir()
+    (folder1,) = (tmp_path / "seed1").iterdir()
+    run_ids = [folder0.name, folder1.name]
+    manual = write_manual_split(tmp_path)
+    cpu = torch.device("cpu")
+
+    results = evaluate_runs(run_ids, cpu, num_workers=0, manual_split_file=manual)
+
+    # The same as averaging the two saved models by hand.
+    models = []
+    for folder in [folder0, folder1]:
+        model = UNet(in_channels=3, base_filters=4)
+        model.load_state_dict(torch.load(folder / "weights.pt"))
+        models.append(model)
+    dataset = FireDataset(tmp_path / "split.csv", "test", ["B7", "B6", "B2"], "voting", "fire_only")
+    by_hand = evaluate_model(AverageOfModels(models), dataset, cpu, num_workers=0)
+    for name in ["tp", "fp", "fn"]:
+        assert results["test"][name] == by_hand[name], name
+    assert results["test"]["average_precision"] == pytest.approx(by_hand["average_precision"])
+
+    # A run averaged with itself is that run.
+    alone = evaluate_runs(run_ids[:1], cpu, num_workers=0, manual_split_file=manual)
+    twice = evaluate_runs(run_ids[:1] * 2, cpu, num_workers=0, manual_split_file=manual)
+    for name in ["tp", "fp", "fn"]:
+        assert twice["test"][name] == alone["test"][name], name
+
+    # The command records an average as an MLflow run of its own.
+    monkeypatch.setattr(sys, "argv", ["evaluate", "--run", *run_ids, "--split-file", str(manual), "--device", "cpu"])
+    evaluate.main()
+    recorded = mlflow.search_runs(filter_string=f"tags.averaged_runs = '{' '.join(run_ids)}'")
+    assert len(recorded) == 1
+    assert recorded.iloc[0]["metrics.test_tp"] == results["test"]["tp"]
+    assert recorded.iloc[0]["metrics.tuned_threshold"] == pytest.approx(results["tuned_threshold"])
+
+
+def test_runs_with_different_inputs_cannot_be_averaged(tmp_path, monkeypatch):
+    config = write_fake_run(tmp_path)
+    other_bands = tmp_path / "other_bands.yaml"
+    other_bands.write_text(config.read_text().replace("bands: [B7, B6, B2]", "bands: [B7, B6, B5]"))
+    run_training(config, 0, tmp_path / "blue", monkeypatch)
+    run_training(other_bands, 0, tmp_path / "nir", monkeypatch)
+    (blue,) = (tmp_path / "blue").iterdir()
+    (nir,) = (tmp_path / "nir").iterdir()
+    with pytest.raises(ValueError, match="bands"):
+        evaluate_runs([blue.name, nir.name], torch.device("cpu"), num_workers=0,
+                      manual_split_file=write_manual_split(tmp_path))

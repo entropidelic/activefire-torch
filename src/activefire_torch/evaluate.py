@@ -8,11 +8,18 @@
 A patch has a manual mask file only if it contains fire; every other patch,
 including the 3 fire-free scenes, is evaluated with an all-zero mask.
 
-A trained run's results are added to its MLflow run, as test_<score>,
-test_full_<score> and manual_<score> metrics.
+A trained run is also scored at a tuned threshold: the one with the best F1
+on its validation split. Several runs that differ only in seed can be
+evaluated together, as the average of their probabilities.
+
+A trained run's results are added to its MLflow run, as final_val_<score>,
+test_<score>, test_full_<score> and manual_<score> metrics (<score> at 0.25,
+tuned_<score> at the tuned threshold) and tuned_threshold. An average gets
+an MLflow run of its own, tagged with the runs it averages.
 
 Run from the repo root, after `uv run splits`:
     uv run evaluate --run <run id>
+    uv run evaluate --run <run id> <run id> <run id>
     uv run evaluate --keras-weights <file.h5> [--base-filters 64] [--bands all]
     uv run evaluate --algorithm schroeder
 """
@@ -46,33 +53,81 @@ def fire_free_scenes(rows: pd.DataFrame, mask_column: str = "mask_manual") -> pd
     return ~rows["scene_id"].isin(scenes_with_fire)
 
 
-def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device, num_workers: int) -> dict:
-    """Run the model over the dataset, in order, and score its probabilities.
-    seconds_per_patch includes reading the files."""
-    everything = np.ones(len(dataset), dtype=bool)
-    return evaluate_subsets(model, dataset, device, num_workers, {"all": everything})["all"]
+class AverageOfModels(nn.Module):
+    """Several models as one, whose probability is the average of theirs."""
+
+    def __init__(self, models: list[nn.Module]) -> None:
+        super().__init__()
+        self.models = nn.ModuleList(models)
+
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        probability = torch.stack([torch.sigmoid(model(image)) for model in self.models]).mean(dim=0)
+        # Back to a logit, which is what a model returns. A probability of
+        # exactly 0 or 1 gives an infinite logit; the scores handle that.
+        return torch.logit(probability)
 
 
-def evaluate_subsets(
+class Scorer:
+    """The scores of one subset of a dataset's patches, added batch by batch.
+
+    chosen  one True / False per row of rows: the patches to score.
+    """
+
+    def __init__(self, rows: pd.DataFrame, mask_column: str, chosen: np.ndarray) -> None:
+        chosen = np.asarray(chosen, dtype=bool)
+        # Fire-free scenes are judged within the subset: a scene whose only
+        # fire is outside the subset counts as fire-free here.
+        fire_free = np.zeros(len(rows), dtype=bool)
+        fire_free[chosen] = fire_free_scenes(rows[chosen], mask_column).to_numpy()
+        self.chosen = torch.tensor(chosen)
+        self.fire_free = torch.tensor(fire_free)
+        self.counts = PixelCounts()
+        self.fire_free_counts = PixelCounts()
+        self.histogram = ScoreHistogram()
+        self.fire_free_histogram = ScoreHistogram()  # for false alarms at another threshold
+        self.seconds_per_patch = float("nan")  # set when the pass is over
+
+    def add(self, logits: torch.Tensor, masks: torch.Tensor, batch_rows: slice) -> None:
+        """A batch's logits and masks; batch_rows: where its patches are in rows."""
+        probabilities = torch.sigmoid(logits)
+        in_subset = self.chosen[batch_rows]
+        self.counts.add(probabilities[in_subset], masks[in_subset])
+        self.histogram.add(logits[in_subset], masks[in_subset])
+        in_fire_free_scene = self.fire_free[batch_rows]
+        self.fire_free_counts.add(probabilities[in_fire_free_scene], masks[in_fire_free_scene])
+        self.fire_free_histogram.add(logits[in_fire_free_scene], masks[in_fire_free_scene])
+
+    def scores(self, tuned_threshold: float | None = None) -> dict:
+        """Scores at the paper's threshold and average precision. With
+        tuned_threshold (from ScoreHistogram.best_threshold() on validation
+        data), also the same scores at that threshold, as tuned_<score>."""
+        scores = {
+            **self.counts.scores(),
+            "average_precision": self.histogram.average_precision(),
+            "fire_free_scenes_fp": self.fire_free_counts.fp,
+            "seconds_per_patch": self.seconds_per_patch,
+        }
+        if tuned_threshold is not None:
+            tuned = self.histogram.scores_at(tuned_threshold)
+            tuned["fire_free_scenes_fp"] = self.fire_free_histogram.scores_at(tuned_threshold)["fp"]
+            scores.update({f"tuned_{name}": value for name, value in tuned.items()})
+        return scores
+
+
+def score_subsets(
     model: nn.Module, dataset: FireDataset, device: torch.device, num_workers: int, subsets: dict[str, np.ndarray]
-) -> dict[str, dict]:
-    """evaluate_model for several subsets of the dataset's patches at once,
-    running the model over each patch only once.
+) -> dict[str, Scorer]:
+    """Run the model over the dataset once, in order, scoring each subset of
+    its patches.
 
     subsets  name -> one True / False per row of dataset.rows: the patches
              that subset is scored on.
 
-    Returns name -> that subset's scores. seconds_per_patch is the same for
-    all: the time of the one pass, per patch of the dataset.
+    Returns name -> that subset's Scorer. seconds_per_patch is the same for
+    all: the time of the one pass, per patch of the dataset, including
+    reading the files.
     """
-    scorers = []
-    for chosen in subsets.values():
-        chosen = np.asarray(chosen, dtype=bool)
-        # Fire-free scenes are judged within the subset: a scene whose only
-        # fire is outside the subset counts as fire-free here.
-        fire_free = np.zeros(len(dataset), dtype=bool)
-        fire_free[chosen] = fire_free_scenes(dataset.rows[chosen], dataset.mask_column).to_numpy()
-        scorers.append((torch.tensor(chosen), torch.tensor(fire_free), PixelCounts(), PixelCounts(), ScoreHistogram()))
+    scorers = {name: Scorer(dataset.rows, dataset.mask_column, chosen) for name, chosen in subsets.items()}
 
     model.to(device).eval()
     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers)
@@ -80,64 +135,82 @@ def evaluate_subsets(
     with torch.inference_mode():
         for batch_number, (images, masks) in enumerate(loader):
             logits = model(images.to(device)).cpu()
-            probabilities = torch.sigmoid(logits)
-
             first_row = batch_number * BATCH_SIZE
-            batch_rows = slice(first_row, first_row + len(images))
-            for chosen, fire_free, counts, fire_free_counts, histogram in scorers:
-                in_subset = chosen[batch_rows]
-                counts.add(probabilities[in_subset], masks[in_subset])
-                histogram.add(logits[in_subset], masks[in_subset])
-                in_fire_free_scene = fire_free[batch_rows]
-                fire_free_counts.add(probabilities[in_fire_free_scene], masks[in_fire_free_scene])
+            for scorer in scorers.values():
+                scorer.add(logits, masks, slice(first_row, first_row + len(images)))
     seconds = time.perf_counter() - start_time
 
-    return {
-        name: {
-            **counts.scores(),
-            "average_precision": histogram.average_precision(),
-            "fire_free_scenes_fp": fire_free_counts.fp,
-            "seconds_per_patch": seconds / len(dataset),
-        }
-        for name, (_, _, counts, fire_free_counts, histogram) in zip(subsets, scorers)
-    }
+    for scorer in scorers.values():
+        scorer.seconds_per_patch = seconds / len(dataset)
+    return scorers
 
 
-def evaluate_run(
-    run_id: str, device: torch.device, num_workers: int, manual_split_file: Path = MANUAL_SPLIT_FILE
+def evaluate_model(model: nn.Module, dataset: FireDataset, device: torch.device, num_workers: int) -> dict:
+    """Run the model over the dataset, in order, and score its probabilities.
+    seconds_per_patch includes reading the files."""
+    everything = np.ones(len(dataset), dtype=bool)
+    return score_subsets(model, dataset, device, num_workers, {"all": everything})["all"].scores()
+
+
+# Settings that runs must share to be averaged: they fix what the models are
+# given and what they are scored on. Runs that differ only in seed share them.
+SAME_FOR_AVERAGING = ["split_file", "split_file_sha256", "mask_source", "version", "bands", "scaling", "band_stats"]
+
+
+def evaluate_runs(
+    run_ids: list[str], device: torch.device, num_workers: int, manual_split_file: Path = MANUAL_SPLIT_FILE
 ) -> dict:
-    """A trained run's final weights, on its own test split and on the manual set.
+    """A trained run's final weights, on its own test split and on the manual
+    set. With several runs, the average of their models' probabilities.
 
-    Bands, model size, scaling and band statistics come from the run's
-    config.yaml in MLflow, so the model sees its inputs exactly as in training.
+    Bands, model size, scaling and band statistics come from the runs'
+    config.yaml in MLflow, so the models see their inputs exactly as in
+    training.
+
+    Each set is scored at the paper's threshold (0.25) and at a tuned one:
+    the threshold with the best F1 on the run's validation split, as
+    tuned_<score>. The validation scores themselves are returned as
+    "final_val" (for one run, at 0.25 they are its last epoch's).
     """
-    record = tracking.read_record(run_id)
+    records = [tracking.read_record(run_id) for run_id in run_ids]
+    record = records[0]
+    for run_id, other in zip(run_ids, records):
+        different = [name for name in SAME_FOR_AVERAGING if other[name] != record[name]]
+        if different:
+            raise ValueError(f"Run {run_id} differs from run {run_ids[0]} in {different}; they cannot be averaged")
     if split_fingerprint(record["split_file"]) != record["split_file_sha256"]:
-        raise ValueError(f"{record['split_file']} has changed since run {run_id} was trained")
-    model = UNet(in_channels=len(record["bands"]), base_filters=record["base_filters"])
-    weights = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="weights.pt")
-    model.load_state_dict(torch.load(weights, map_location="cpu"))
+        raise ValueError(f"{record['split_file']} has changed since run {run_ids[0]} was trained")
 
-    manual_set = FireDataset(
-        split_file=manual_split_file,
-        split="test",
-        bands=record["bands"],
-        mask_source="manual",
-        version="full",
-        scaling=record["scaling"],
-        band_stats=record["band_stats"],
-    )
+    models = []
+    for run_id, run_record in zip(run_ids, records):
+        run_model = UNet(in_channels=len(run_record["bands"]), base_filters=run_record["base_filters"])
+        weights = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="weights.pt")
+        run_model.load_state_dict(torch.load(weights, map_location="cpu"))
+        models.append(run_model)
+    model = models[0] if len(models) == 1 else AverageOfModels(models)
+
+    def dataset(split_file: str | Path, split: str, mask_source: str, version: str) -> FireDataset:
+        return FireDataset(
+            split_file=split_file,
+            split=split,
+            bands=record["bands"],
+            mask_source=mask_source,
+            version=version,
+            scaling=record["scaling"],
+            band_stats=record["band_stats"],
+        )
+
+    # The validation split the run stopped on. The threshold is chosen here,
+    # never on the test or manual sets it is then applied to.
+    val_set = dataset(record["split_file"], "val", record["mask_source"], record["version"])
+    everything = np.ones(len(val_set), dtype=bool)
+    val_scorer = score_subsets(model, val_set, device, num_workers, {"final_val": everything})["final_val"]
+    threshold = val_scorer.histogram.best_threshold()  # None if the validation split has no fire
+    results = {"final_val": val_scorer.scores(threshold)}
+
     # Every test patch, each with the mask of the run's source, or an all-zero
     # mask where that source found no fire.
-    full_test_set = FireDataset(
-        split_file=record["split_file"],
-        split="test",
-        bands=record["bands"],
-        mask_source=record["mask_source"],
-        version="full",
-        scaling=record["scaling"],
-        band_stats=record["band_stats"],
-    )
+    full_test_set = dataset(record["split_file"], "test", record["mask_source"], "full")
     # "test" is the run's own version of the test split. For a fire_only run
     # that is the patches with a mask; the full version adds the patches where
     # only other algorithms found fire (Stage 2's primary metric), reported as
@@ -150,10 +223,18 @@ def evaluate_run(
         subsets = {"test": has_mask, "test_full": everything}
     else:
         subsets = {"test": everything}
-    results = evaluate_subsets(model, full_test_set, device, num_workers, subsets)
+    for name, scorer in score_subsets(model, full_test_set, device, num_workers, subsets).items():
+        results[name] = scorer.scores(threshold)
+
+    manual_set = dataset(manual_split_file, "test", "manual", "full")
+    everything = np.ones(len(manual_set), dtype=bool)
+    manual_scorer = score_subsets(model, manual_set, device, num_workers, {"manual": everything})["manual"]
+    results["manual"] = manual_scorer.scores(threshold)
+
     return {
         **results,
-        "manual": evaluate_model(model, manual_set, device, num_workers),
+        "tuned_threshold": threshold,
+        "runs": run_ids,
         "test_split_sha256": record["split_file_sha256"],
         "manual_split_sha256": split_fingerprint(manual_split_file),
     }
@@ -187,7 +268,9 @@ def evaluate_algorithm(rows: pd.DataFrame, algorithm: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     what = parser.add_mutually_exclusive_group(required=True)
-    what.add_argument("--run", help="MLflow run id of one of our trained models")
+    what.add_argument("--run", nargs="+", metavar="RUN_ID",
+                      help="MLflow run id of one of our trained models; several ids (runs that differ only in "
+                           "seed) evaluate the average of their probabilities")
     what.add_argument("--keras-weights", type=Path, help="the authors' .h5 weights file")
     what.add_argument("--algorithm", choices=["schroeder", "murphy", "kumar-roy"], help="score this algorithm's masks")
     parser.add_argument("--base-filters", type=int, help="with --keras-weights: 16 (default) for U-Net-Light, 64 for U-Net")
@@ -204,20 +287,44 @@ def main() -> None:
 
     if args.run:
         tracking.setup()
-        results = evaluate_run(args.run, get_device(args.device), args.num_workers, args.split_file)
-        # Through the client, not mlflow.start_run(run_id=...): closing the run
-        # again would overwrite the end time (and so the duration) of its training.
-        client = mlflow.MlflowClient()
-        for name in ["test", "test_full", "manual"]:
+        results = evaluate_runs(args.run, get_device(args.device), args.num_workers, args.split_file)
+        metrics = {}
+        threshold = results["tuned_threshold"]
+        if threshold is not None:
+            metrics["tuned_threshold"] = threshold
+            print(f"Tuned threshold (best F1 on validation): {threshold:.4f}")
+        for name in ["final_val", "test", "test_full", "manual"]:
             if name not in results:
                 continue
             scores = results[name]
             print(f"{name}: precision {scores['precision']:.4f}  recall {scores['recall']:.4f}  "
                   f"F1 {scores['f1']:.4f}  IoU {scores['iou']:.4f}  AP {scores['average_precision']:.4f}")
-            for score, value in scores.items():
-                client.log_metric(args.run, f"{name}_{score}", value)
-        # A tag, not a parameter: a run can be evaluated again on a newer manual split file.
-        client.set_tag(args.run, "manual_split_sha256", results["manual_split_sha256"])
+            if threshold is not None:
+                print(f"{'':{len(name)}}  at the tuned threshold: precision {scores['tuned_precision']:.4f}  "
+                      f"recall {scores['tuned_recall']:.4f}  F1 {scores['tuned_f1']:.4f}  "
+                      f"IoU {scores['tuned_iou']:.4f}")
+            metrics.update({f"{name}_{score}": value for score, value in scores.items()})
+
+        if len(args.run) == 1:
+            # Through the client, not mlflow.start_run(run_id=...): closing the run
+            # again would overwrite the end time (and so the duration) of its training.
+            client = mlflow.MlflowClient()
+            for name, value in metrics.items():
+                client.log_metric(args.run[0], name, value)
+            # A tag, not a parameter: a run can be evaluated again on a newer manual split file.
+            client.set_tag(args.run[0], "manual_split_sha256", results["manual_split_sha256"])
+        else:
+            # An average belongs to none of its runs, so it gets an MLflow run
+            # of its own, which names them.
+            record = tracking.read_record(args.run[0])
+            config_name = Path(record.get("config_file", "runs")).stem
+            with mlflow.start_run(run_name=f"{config_name}_average_of_{len(args.run)}") as average_run:
+                mlflow.log_params({name: record[name] for name in ["split_file", "mask_source", "version", "bands",
+                                                                   "scaling"]})
+                mlflow.set_tags({"averaged_runs": " ".join(args.run),
+                                 "manual_split_sha256": results["manual_split_sha256"]})
+                mlflow.log_metrics(metrics)
+                print(f"Recorded as run {average_run.info.run_id} ({average_run.info.run_name})")
         output = args.output
     else:
         rows = select_rows(args.split_file, "test", "manual", "full")

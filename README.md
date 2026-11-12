@@ -37,10 +37,21 @@ uv run train --resume <run id>
 ```
 
 Evaluate a trained run on its own test split and on the manually annotated set.
-The results are added to the run in MLflow, as `test_*` and `manual_*` metrics.
+Each is scored at the paper's threshold (0.25) and at a tuned one, the
+threshold with the best F1 on the run's validation split. The results are
+added to the run in MLflow, as `final_val_*`, `test_*` and `manual_*` metrics
+(`*_tuned_*` at the tuned threshold) and `tuned_threshold`.
 
 ```
 uv run evaluate --run <run id>
+```
+
+Evaluate the average of several runs' probabilities, for runs that differ
+only in seed. The average is recorded as an MLflow run of its own, tagged with
+the runs it averages.
+
+```
+uv run evaluate --run <run id> <run id> <run id>
 ```
 
 Evaluate the authors' trained Keras weights on the manually annotated set
